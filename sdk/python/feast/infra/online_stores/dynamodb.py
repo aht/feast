@@ -50,7 +50,10 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     """Online store type selector"""
 
     region: StrictStr
-    """ AWS Region Name """
+    """AWS Region Name"""
+
+    iam_role: Optional[StrictStr] = None
+    """(optional) IAM Role to assume, if needed e.g. for cross-account access"""
 
 
 class DynamoDBOnlineStore(OnlineStore):
@@ -73,8 +76,8 @@ class DynamoDBOnlineStore(OnlineStore):
     ):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_client = self._get_dynamodb_client(online_config.region)
-        dynamodb_resource = self._get_dynamodb_resource(online_config.region)
+        dynamodb_client = self._get_dynamodb_client(online_config)
+        dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         for table_instance in tables_to_keep:
             try:
@@ -111,7 +114,7 @@ class DynamoDBOnlineStore(OnlineStore):
     ):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_resource = self._get_dynamodb_resource(online_config.region)
+        dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         for table in tables:
             _delete_table_idempotent(dynamodb_resource, _get_table_name(config, table))
@@ -128,7 +131,7 @@ class DynamoDBOnlineStore(OnlineStore):
     ) -> None:
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_resource = self._get_dynamodb_resource(online_config.region)
+        dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         table_instance = dynamodb_resource.Table(_get_table_name(config, table))
         with table_instance.batch_writer() as batch:
@@ -157,7 +160,7 @@ class DynamoDBOnlineStore(OnlineStore):
     ) -> List[Tuple[Optional[datetime], Optional[Dict[str, ValueProto]]]]:
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_resource = self._get_dynamodb_resource(online_config.region)
+        dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         result: List[Tuple[Optional[datetime], Optional[Dict[str, ValueProto]]]] = []
         for entity_key in entity_keys:
@@ -178,23 +181,51 @@ class DynamoDBOnlineStore(OnlineStore):
                 result.append((None, None))
         return result
 
-    def _get_dynamodb_client(self, region: str):
+    def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
         if self._dynamodb_client is None:
-            self._dynamodb_client = _initialize_dynamodb_client(region)
+            self._dynamodb_client = _initialize_dynamodb_client(online_config)
         return self._dynamodb_client
 
-    def _get_dynamodb_resource(self, region: str):
+    def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
         if self._dynamodb_resource is None:
-            self._dynamodb_resource = _initialize_dynamodb_resource(region)
+            self._dynamodb_resource = _initialize_dynamodb_resource(online_config)
         return self._dynamodb_resource
 
 
-def _initialize_dynamodb_client(region: str):
-    return boto3.client("dynamodb", region_name=region)
+def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
+    if online_config.iam_role is not None:
+        sts_client = boto3.client('sts')
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=online_config.iam_role,
+            RoleSessionName="AssumeRoleFeastSession"
+        )
+        credentials = assumed_role_object['Credentials']
+        return boto3.client(
+            "dynamodb",
+            region_name=online_config.region,
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken'])
+    else:
+        return boto3.client("dynamodb", region_name=online_config.region)
 
 
-def _initialize_dynamodb_resource(region: str):
-    return boto3.resource("dynamodb", region_name=region)
+def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
+    if online_config.iam_role is not None:
+        sts_client = boto3.client('sts')
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=online_config.iam_role,
+            RoleSessionName="AssumeRoleFeastSession"
+        )
+        credentials = assumed_role_object['Credentials']
+        return boto3.resource(
+            "dynamodb",
+            region_name=online_config.region,
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken'])
+    else:
+        return boto3.resource("dynamodb", region_name=online_config.region)
 
 
 def _get_table_name(config: RepoConfig, table: FeatureView) -> str:
