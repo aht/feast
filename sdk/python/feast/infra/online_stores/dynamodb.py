@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -60,9 +61,6 @@ class DynamoDBOnlineStore(OnlineStore):
     """
     Online feature store for AWS DynamoDB.
     """
-
-    _dynamodb_client = None
-    _dynamodb_resource = None
 
     @log_exceptions_and_usage(online_store="dynamodb")
     def update(
@@ -182,14 +180,16 @@ class DynamoDBOnlineStore(OnlineStore):
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
-        if self._dynamodb_client is None:
-            self._dynamodb_client = _initialize_dynamodb_client(online_config)
-        return self._dynamodb_client
+        threadlocal = threading.local()
+        if "dynamodb_client" not in threadlocal:
+            threadlocal.dynamodb_client = _initialize_dynamodb_client(online_config)
+        return threadlocal.dynamodb_client
 
     def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
-        if self._dynamodb_resource is None:
-            self._dynamodb_resource = _initialize_dynamodb_resource(online_config)
-        return self._dynamodb_resource
+        threadlocal = threading.local()
+        if "dynamodb_resource" not in threadlocal:
+            threadlocal.dynamodb_resource = _initialize_dynamodb_resource(online_config)
+        return threadlocal.dynamodb_resource
 
 
 def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
