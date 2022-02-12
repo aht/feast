@@ -56,11 +56,15 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     iam_role: Optional[StrictStr] = None
     """(optional) IAM Role to assume, if needed e.g. for cross-account access"""
 
+    max_pool_connections: Optional[int] = None
+    """(optional) Boto3 client pool size (for use in online reads)"""
+
 
 class DynamoDBOnlineStore(OnlineStore):
     """
     Online feature store for AWS DynamoDB.
     """
+    _dynamodb_client = None
 
     @log_exceptions_and_usage(online_store="dynamodb")
     def update(
@@ -180,9 +184,7 @@ class DynamoDBOnlineStore(OnlineStore):
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
-        threadlocal = threading.local()
-        if "dynamodb_client" not in threadlocal.__dict__:
-            threadlocal.dynamodb_client = _initialize_dynamodb_client(online_config)
+        self._dynamodb_client = _initialize_dynamodb_client(online_config)
         return threadlocal.dynamodb_client
 
     def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
@@ -200,12 +202,22 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             RoleSessionName="AssumeRoleFeastSession"
         )
         credentials = assumed_role_object['Credentials']
-        return boto3.client(
-            "dynamodb",
-            region_name=online_config.region,
-            aws_access_key_id=credentials['AccessKeyId'],
-            aws_secret_access_key=credentials['SecretAccessKey'],
-            aws_session_token=credentials['SessionToken'])
+        if online_config.max_pool_connections is not None:
+            return boto3.client(
+                "dynamodb",
+                region_name=online_config.region,
+                aws_access_key_id=credentials['AccessKeyId'],
+                aws_secret_access_key=credentials['SecretAccessKey'],
+                aws_session_token=credentials['SessionToken'],
+                config=botocore.client.Config(max_pool_connections=online_config.max_pool_connections))
+        else:
+            return boto3.client(
+                "dynamodb",
+                region_name=online_config.region,
+                aws_access_key_id=credentials['AccessKeyId'],
+                aws_secret_access_key=credentials['SecretAccessKey'],
+                aws_session_token=credentials['SessionToken'])
+
     else:
         return boto3.client("dynamodb", region_name=online_config.region)
 
