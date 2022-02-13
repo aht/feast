@@ -207,7 +207,9 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             aws_secret_access_key=credentials['SecretAccessKey'],
             aws_session_token=credentials['SessionToken'])
     else:
-        return boto3.client("dynamodb", region_name=online_config.region)
+        return boto3.client("dynamodb", 
+                            region_name=online_config.region,
+                            config=botocore.client.Config(max_pool_connections=1))
 
 
 def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
