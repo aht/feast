@@ -205,11 +205,18 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             region_name=online_config.region,
             aws_access_key_id=credentials['AccessKeyId'],
             aws_secret_access_key=credentials['SecretAccessKey'],
-            aws_session_token=credentials['SessionToken'])
+            aws_session_token=credentials['SessionToken'],
+            config=botocore.client.Config(max_pool_connections=1
+                                          connect_timeout=1,
+                                          read_timeout=0.01, # 10ms
+                                          retries={'mode': 'standard', 'total_max_attempts': 3}))
     else:
         return boto3.client("dynamodb", 
                             region_name=online_config.region,
-                            config=botocore.client.Config(max_pool_connections=1))
+                            config=botocore.client.Config(max_pool_connections=1
+                                          connect_timeout=1,
+                                          read_timeout=0.01,
+                                          retries={'mode': 'standard', 'total_max_attempts': 3})))
 
 
 def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
