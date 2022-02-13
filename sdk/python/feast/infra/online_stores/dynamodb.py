@@ -216,7 +216,7 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
                             config=botocore.client.Config(max_pool_connections=1
                                           connect_timeout=1,
                                           read_timeout=0.01,
-                                          retries={'mode': 'standard', 'total_max_attempts': 3})))
+                                          retries={'mode': 'standard', 'total_max_attempts': 3}))
 
 
 def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
