@@ -212,14 +212,14 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             aws_session_token=credentials['SessionToken'],
             config=botocore.client.Config(max_pool_connections=1,
                                           connect_timeout=1,
-                                          read_timeout=config.boto3_read_timeout / 1000. if config.boto3_read_timeout else 1,
+                                          read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
     else:
         return boto3.client("dynamodb", 
                             region_name=online_config.region,
                             config=botocore.client.Config(max_pool_connections=1,
                                           connect_timeout=1,
-                                          read_timeout=config.boto3_read_timeout / 1000. if config.boto3_read_timeout else 1,
+                                          read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
 
 
