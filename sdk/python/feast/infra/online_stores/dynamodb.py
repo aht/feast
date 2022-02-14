@@ -159,13 +159,14 @@ class DynamoDBOnlineStore(OnlineStore):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
         dynamodb_resource = self._get_dynamodb_resource(online_config)
+        dynamodb_client = self._get_dynamodb_client(online_config)
+        table_instance = dynamodb_resource.Table(_get_table_name(config, table))
 
         result: List[Tuple[Optional[datetime], Optional[Dict[str, ValueProto]]]] = []
         for entity_key in entity_keys:
-            table_instance = dynamodb_resource.Table(_get_table_name(config, table))
             entity_id = compute_entity_id(entity_key)
             with tracing_span(name="remote_call"):
-                response = table_instance.get_item(Key={"entity_id": entity_id})
+                response = dynamodb_client.get_item(Key={"entity_id": entity_id})
             value = response.get("Item")
 
             if value is not None:
