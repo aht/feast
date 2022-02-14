@@ -177,7 +177,7 @@ class DynamoDBOnlineStore(OnlineStore):
                 res = {}
                 for feature_name, value_bin in value["values"]['M'].items():
                     val = ValueProto()
-                    val.ParseFromString(value_bin['B'].value)
+                    val.ParseFromString(value_bin['B'])
                     res[feature_name['S']] = val
                 result.append((value["event_ts"]['S'], res))
             else:
