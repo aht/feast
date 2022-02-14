@@ -57,6 +57,9 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     iam_role: Optional[StrictStr] = None
     """(optional) IAM Role to assume, if needed e.g. for cross-account access"""
 
+    boto3_read_timeout: Optional[int] = None
+    """(optional) boto3 read timeout config"""
+
 
 class DynamoDBOnlineStore(OnlineStore):
     """
@@ -209,14 +212,14 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             aws_session_token=credentials['SessionToken'],
             config=botocore.client.Config(max_pool_connections=1,
                                           connect_timeout=1,
-                                          read_timeout=0.01, # 10ms
+                                          read_timeout=config.boto3_read_timeout / 1000. if config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
     else:
         return boto3.client("dynamodb", 
                             region_name=online_config.region,
                             config=botocore.client.Config(max_pool_connections=1,
                                           connect_timeout=1,
-                                          read_timeout=0.01,
+                                          read_timeout=config.boto3_read_timeout / 1000. if config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
 
 
