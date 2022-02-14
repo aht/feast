@@ -34,6 +34,7 @@ from feast.usage import log_exceptions_and_usage, tracing_span
 
 try:
     import boto3
+    import botocore
     from botocore.exceptions import ClientError
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
