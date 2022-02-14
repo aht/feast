@@ -170,15 +170,16 @@ class DynamoDBOnlineStore(OnlineStore):
             entity_id = compute_entity_id(entity_key)
             with tracing_span(name="remote_call"):
                 response = dynamodb_client.get_item(TableName=table_name, Key={"entity_id": {'S': entity_id}})
+            print(response)
             value = response.get("Item")
 
             if value is not None:
                 res = {}
-                for feature_name, value_bin in value["values"].items():
+                for feature_name, value_bin in value["values"]['M'].items():
                     val = ValueProto()
-                    val.ParseFromString(value_bin.value)
-                    res[feature_name] = val
-                result.append((value["event_ts"], res))
+                    val.ParseFromString(value_bin['B'].value)
+                    res[feature_name['S']] = val
+                result.append((value["event_ts"]['S'], res))
             else:
                 result.append((None, None))
         return result
