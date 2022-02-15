@@ -187,9 +187,9 @@ class DynamoDBOnlineStore(OnlineStore):
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
-        if _dynamodb_client is None:
-            _dynamodb_client = _initialize_dynamodb_client(online_config)
-        return _dynamodb_client
+        if self._dynamodb_client is None:
+            self._dynamodb_client = _initialize_dynamodb_client(online_config)
+        return self._dynamodb_client
 
     def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
         threadlocal = threading.local()
