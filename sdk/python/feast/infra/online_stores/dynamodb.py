@@ -170,7 +170,6 @@ class DynamoDBOnlineStore(OnlineStore):
             entity_id = compute_entity_id(entity_key)
             with tracing_span(name="remote_call"):
                 response = dynamodb_client.get_item(TableName=table_name, Key={"entity_id": {'S': entity_id}})
-            print(response)
             value = response.get("Item")
 
             if value is not None:
