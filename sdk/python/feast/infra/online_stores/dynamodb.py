@@ -60,11 +60,14 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     boto3_read_timeout: Optional[int] = None
     """(optional) boto3 read timeout config"""
 
+    boto3_max_pool_connections: Optional[int] = None
+    """(optional) boto3 read timeout config"""
 
 class DynamoDBOnlineStore(OnlineStore):
     """
     Online feature store for AWS DynamoDB.
     """
+    _dynamodb_client = None
 
     @log_exceptions_and_usage(online_store="dynamodb")
     def update(
@@ -184,10 +187,9 @@ class DynamoDBOnlineStore(OnlineStore):
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
-        threadlocal = threading.local()
-        if "dynamodb_client" not in threadlocal.__dict__:
-            threadlocal.dynamodb_client = _initialize_dynamodb_client(online_config)
-        return threadlocal.dynamodb_client
+        if _dynamodb_client is None:
+            _dynamodb_client = _initialize_dynamodb_client(online_config)
+        return _dynamodb_client
 
     def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
         threadlocal = threading.local()
@@ -210,14 +212,14 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             aws_access_key_id=credentials['AccessKeyId'],
             aws_secret_access_key=credentials['SecretAccessKey'],
             aws_session_token=credentials['SessionToken'],
-            config=botocore.client.Config(max_pool_connections=1,
+            config=botocore.client.Config(max_pool_connections=online_config.boto3_max_pool_connections if online_config.boto3_read_timeout else 10,
                                           connect_timeout=1,
                                           read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
     else:
         return boto3.client("dynamodb", 
                             region_name=online_config.region,
-                            config=botocore.client.Config(max_pool_connections=1,
+                            config=botocore.client.Config(max_pool_connections=online_config.boto3_max_pool_connections if online_config.boto3_read_timeout else 10,
                                           connect_timeout=1,
                                           read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
                                           retries={'mode': 'standard', 'total_max_attempts': 3}))
