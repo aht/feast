@@ -4,19 +4,21 @@ import os
 import time
 import unittest
 from datetime import timedelta
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import assertpy
 import numpy as np
 import pandas as pd
 import pytest
 import requests
+from botocore.exceptions import BotoCoreError
 
 from feast import Entity, Feature, FeatureService, FeatureView, ValueType
 from feast.errors import (
     FeatureNameCollisionError,
     RequestDataNotFoundInEntityRowsException,
 )
+from feast.wait import wait_retry_backoff
 from tests.integration.feature_repos.repo_configuration import (
     Environment,
     construct_universal_feature_views,
@@ -28,6 +30,7 @@ from tests.integration.feature_repos.universal.entities import (
 )
 from tests.integration.feature_repos.universal.feature_views import (
     create_driver_hourly_stats_feature_view,
+    driver_feature_view,
 )
 from tests.utils.data_source_utils import prep_file_source
 
@@ -136,6 +139,7 @@ def test_write_to_online_store_event_check(local_redis_environment):
 
 
 @pytest.mark.integration
+@pytest.mark.universal
 def test_write_to_online_store(environment, universal_data_sources):
     fs = environment.feature_store
     entities, datasets, data_sources = universal_data_sources
@@ -185,7 +189,7 @@ def _get_online_features_dict_remotely(
 
     The output should be identical to:
 
-    >>> fs.get_online_features(features=features, entity_rows=entity_rows, full_feature_names=full_feature_names).to_dict()
+    fs.get_online_features(features=features, entity_rows=entity_rows, full_feature_names=full_feature_names).to_dict()
 
     This makes it easy to test the remote feature server by comparing the output to the local method.
 
@@ -212,11 +216,15 @@ def _get_online_features_dict_remotely(
         time.sleep(1)
     else:
         raise Exception("Failed to get online features from remote feature server")
-    keys = response["field_values"][0]["statuses"].keys()
+    if "metadata" not in response:
+        raise Exception(
+            f"Failed to get online features from remote feature server {response}"
+        )
+    keys = response["metadata"]["feature_names"]
     # Get rid of unnecessary structure in the response, leaving list of dicts
-    response = [row["fields"] for row in response["field_values"]]
+    response = [row["values"] for row in response["results"]]
     # Convert list of dicts (response) into dict of lists which is the format of the return value
-    return {key: [row.get(key) for row in response] for key in keys}
+    return {key: [row[idx] for row in response] for idx, key in enumerate(keys)}
 
 
 def get_online_features_dict(
@@ -238,8 +246,8 @@ def get_online_features_dict(
     assertpy.assert_that(online_features).is_not_none()
     dict1 = online_features.to_dict()
 
-    endpoint = environment.feature_store.get_feature_server_endpoint()
-    # If endpoint is None, it means that the remote feature server isn't configured
+    endpoint = environment.get_feature_server_endpoint()
+    # If endpoint is None, it means that a local / remote feature server aren't configured
     if endpoint is not None:
         dict2 = _get_online_features_dict_remotely(
             endpoint=endpoint,
@@ -497,6 +505,90 @@ def test_online_retrieval(environment, universal_data_sources, full_feature_name
         origins_df,
         destinations_df,
     )
+
+
+@pytest.mark.integration
+@pytest.mark.universal
+def test_online_store_cleanup(environment, universal_data_sources):
+    """
+    Some online store implementations (like Redis) keep features from different features views
+    but with common entities together.
+    This might end up with deletion of all features attached to the entity,
+    when only one feature view was deletion target (see https://github.com/feast-dev/feast/issues/2150).
+
+    Plan:
+        1. Register two feature views with common entity "driver"
+        2. Materialize data
+        3. Check if features are available (via online retrieval)
+        4. Delete one feature view
+        5. Check that features for other are still available
+        6. Delete another feature view (and create again)
+        7. Verify that features for both feature view were deleted
+    """
+    fs = environment.feature_store
+    entities, datasets, data_sources = universal_data_sources
+    driver_stats_fv = construct_universal_feature_views(data_sources)["driver"]
+
+    df = pd.DataFrame(
+        {
+            "ts_1": [environment.end_date] * len(entities["driver"]),
+            "created_ts": [environment.end_date] * len(entities["driver"]),
+            "driver_id": entities["driver"],
+            "value": np.random.random(size=len(entities["driver"])),
+        }
+    )
+
+    ds = environment.data_source_creator.create_data_source(
+        df, destination_name="simple_driver_dataset"
+    )
+
+    simple_driver_fv = driver_feature_view(
+        data_source=ds, name="test_universal_online_simple_driver"
+    )
+
+    fs.apply([driver(), simple_driver_fv, driver_stats_fv])
+
+    fs.materialize(
+        environment.start_date - timedelta(days=1),
+        environment.end_date + timedelta(days=1),
+    )
+    expected_values = df.sort_values(by="driver_id")
+
+    features = [f"{simple_driver_fv.name}:value"]
+    entity_rows = [{"driver": driver_id} for driver_id in sorted(entities["driver"])]
+
+    online_features = fs.get_online_features(
+        features=features, entity_rows=entity_rows
+    ).to_dict()
+    assert np.allclose(expected_values["value"], online_features["value"])
+
+    fs.apply(
+        objects=[simple_driver_fv], objects_to_delete=[driver_stats_fv], partial=False
+    )
+
+    online_features = fs.get_online_features(
+        features=features, entity_rows=entity_rows
+    ).to_dict()
+    assert np.allclose(expected_values["value"], online_features["value"])
+
+    fs.apply(objects=[], objects_to_delete=[simple_driver_fv], partial=False)
+
+    def eventually_apply() -> Tuple[None, bool]:
+        try:
+            fs.apply([simple_driver_fv])
+        except BotoCoreError:
+            return None, False
+
+        return None, True
+
+    # Online store backend might have eventual consistency in schema update
+    # So recreating table that was just deleted might need some retries
+    wait_retry_backoff(eventually_apply, timeout_secs=60)
+
+    online_features = fs.get_online_features(
+        features=features, entity_rows=entity_rows
+    ).to_dict()
+    assert all(v is None for v in online_features["value"])
 
 
 def response_feature_name(feature: str, full_feature_names: bool) -> str:

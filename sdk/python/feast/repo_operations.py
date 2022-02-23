@@ -5,22 +5,23 @@ import random
 import re
 import sys
 from importlib.abc import Loader
+from importlib.machinery import ModuleSpec
 from pathlib import Path
-from typing import List, Set, Union, cast
+from typing import List, Set, Union
 
 import click
 from click.exceptions import BadParameter
 
-from feast.base_feature_view import BaseFeatureView
-from feast.diff.FcoDiff import TransitionType, tag_objects_for_keep_delete_add
+from feast.diff.registry_diff import extract_objects_for_keep_delete_update_add
 from feast.entity import Entity
 from feast.feature_service import FeatureService
-from feast.feature_store import FeatureStore, RepoContents
-from feast.feature_view import DUMMY_ENTITY, DUMMY_ENTITY_NAME, FeatureView
+from feast.feature_store import FeatureStore
+from feast.feature_view import DUMMY_ENTITY, FeatureView
 from feast.names import adjectives, animals
 from feast.on_demand_feature_view import OnDemandFeatureView
-from feast.registry import Registry
+from feast.registry import FEAST_OBJECT_TYPES, FeastObjectType, Registry
 from feast.repo_config import RepoConfig
+from feast.repo_contents import RepoContents
 from feast.request_feature_view import RequestFeatureView
 from feast.usage import log_exceptions_and_usage
 
@@ -78,7 +79,11 @@ def get_repo_files(repo_root: Path) -> List[Path]:
     ignore_files = get_ignore_files(repo_root, ignore_paths)
 
     # List all Python files in the root directory (recursively)
-    repo_files = {p.resolve() for p in repo_root.glob("**/*.py") if p.is_file()}
+    repo_files = {
+        p.resolve()
+        for p in repo_root.glob("**/*.py")
+        if p.is_file() and "__init__.py" != p.name
+    }
     # Ignore all files that match any of the ignore paths in .feastignore
     repo_files -= ignore_files
 
@@ -127,20 +132,9 @@ def plan(repo_config: RepoConfig, repo_path: Path, skip_source_validation: bool)
         for data_source in data_sources:
             data_source.validate(store.config)
 
-    diff = store.plan(repo)
-    views_to_delete = [
-        v
-        for v in diff.fco_diffs
-        if v.fco_type == "feature view" and v.transition_type == TransitionType.DELETE
-    ]
-    views_to_keep = [
-        v
-        for v in diff.fco_diffs
-        if v.fco_type == "feature view"
-        and v.transition_type in {TransitionType.CREATE, TransitionType.UNCHANGED}
-    ]
-
-    log_cli_output(diff, views_to_delete, views_to_keep)
+    registry_diff, infra_diff, _ = store._plan(repo)
+    click.echo(registry_diff.to_string())
+    click.echo(infra_diff.to_string())
 
 
 def _prepare_registry_and_repo(repo_config, repo_path):
@@ -153,88 +147,95 @@ def _prepare_registry_and_repo(repo_config, repo_path):
         )
         sys.exit(1)
     registry = store.registry
-    registry._initialize_registry()
     sys.dont_write_bytecode = True
     repo = parse_repo(repo_path)
     return project, registry, repo, store
 
 
 def extract_objects_for_apply_delete(project, registry, repo):
-    (
-        entities_to_keep,
-        entities_to_delete,
-        entities_to_add,
-    ) = tag_objects_for_keep_delete_add(
-        set(registry.list_entities(project=project)), repo.entities
-    )
     # TODO(achals): This code path should be refactored to handle added & kept entities separately.
-    entities_to_keep = set(entities_to_keep).union(entities_to_add)
-    views = tag_objects_for_keep_delete_add(
-        set(registry.list_feature_views(project=project)), repo.feature_views
-    )
-    views_to_keep, views_to_delete, views_to_add = (
-        cast(Set[FeatureView], views[0]),
-        cast(Set[FeatureView], views[1]),
-        cast(Set[FeatureView], views[2]),
-    )
-    request_views = tag_objects_for_keep_delete_add(
-        set(registry.list_request_feature_views(project=project)),
-        repo.request_feature_views,
-    )
-    request_views_to_keep: Set[RequestFeatureView]
-    request_views_to_delete: Set[RequestFeatureView]
-    request_views_to_add: Set[RequestFeatureView]
-    request_views_to_keep, request_views_to_delete, request_views_to_add = (
-        cast(Set[RequestFeatureView], request_views[0]),
-        cast(Set[RequestFeatureView], request_views[1]),
-        cast(Set[RequestFeatureView], request_views[2]),
-    )
-    base_views_to_keep: Set[Union[RequestFeatureView, FeatureView]] = {
-        *views_to_keep,
-        *views_to_add,
-        *request_views_to_keep,
-        *request_views_to_add,
-    }
-    base_views_to_delete: Set[Union[RequestFeatureView, FeatureView]] = {
-        *views_to_delete,
-        *request_views_to_delete,
-    }
-    odfvs = tag_objects_for_keep_delete_add(
-        set(registry.list_on_demand_feature_views(project=project)),
-        repo.on_demand_feature_views,
-    )
-    odfvs_to_keep, odfvs_to_delete, odfvs_to_add = (
-        cast(Set[OnDemandFeatureView], odfvs[0]),
-        cast(Set[OnDemandFeatureView], odfvs[1]),
-        cast(Set[OnDemandFeatureView], odfvs[2]),
-    )
-    odfvs_to_keep = odfvs_to_keep.union(odfvs_to_add)
     (
-        services_to_keep,
-        services_to_delete,
-        services_to_add,
-    ) = tag_objects_for_keep_delete_add(
-        set(registry.list_feature_services(project=project)), repo.feature_services
-    )
-    services_to_keep = services_to_keep.union(services_to_add)
-    sys.dont_write_bytecode = False
-    # Apply all changes to the registry and infrastructure.
-    all_to_apply: List[
-        Union[Entity, BaseFeatureView, FeatureService, OnDemandFeatureView]
-    ] = []
-    all_to_apply.extend(entities_to_keep)
-    all_to_apply.extend(base_views_to_keep)
-    all_to_apply.extend(services_to_keep)
-    all_to_apply.extend(odfvs_to_keep)
-    all_to_delete: List[
-        Union[Entity, BaseFeatureView, FeatureService, OnDemandFeatureView]
-    ] = []
-    all_to_delete.extend(entities_to_delete)
-    all_to_delete.extend(base_views_to_delete)
-    all_to_delete.extend(services_to_delete)
-    all_to_delete.extend(odfvs_to_delete)
+        _,
+        objs_to_delete,
+        objs_to_update,
+        objs_to_add,
+    ) = extract_objects_for_keep_delete_update_add(registry, project, repo)
 
-    return all_to_apply, all_to_delete, views_to_delete, views_to_keep
+    all_to_apply: List[
+        Union[
+            Entity, FeatureView, RequestFeatureView, OnDemandFeatureView, FeatureService
+        ]
+    ] = []
+    for object_type in FEAST_OBJECT_TYPES:
+        to_apply = set(objs_to_add[object_type]).union(objs_to_update[object_type])
+        all_to_apply.extend(to_apply)
+
+    all_to_delete: List[
+        Union[
+            Entity, FeatureView, RequestFeatureView, OnDemandFeatureView, FeatureService
+        ]
+    ] = []
+    for object_type in FEAST_OBJECT_TYPES:
+        all_to_delete.extend(objs_to_delete[object_type])
+
+    return (
+        all_to_apply,
+        all_to_delete,
+        set(
+            objs_to_add[FeastObjectType.FEATURE_VIEW].union(
+                objs_to_update[FeastObjectType.FEATURE_VIEW]
+            )
+        ),
+        objs_to_delete[FeastObjectType.FEATURE_VIEW],
+    )
+
+
+def apply_total_with_repo_instance(
+    store: FeatureStore,
+    project: str,
+    registry: Registry,
+    repo: RepoContents,
+    skip_source_validation: bool,
+):
+    if not skip_source_validation:
+        data_sources = [t.batch_source for t in repo.feature_views]
+        # Make sure the data source used by this feature view is supported by Feast
+        for data_source in data_sources:
+            data_source.validate(store.config)
+
+    registry_diff, infra_diff, new_infra = store._plan(repo)
+
+    # For each object in the registry, determine whether it should be kept or deleted.
+    (
+        all_to_apply,
+        all_to_delete,
+        views_to_keep,
+        views_to_delete,
+    ) = extract_objects_for_apply_delete(project, registry, repo)
+
+    click.echo(registry_diff.to_string())
+
+    if store._should_use_plan():
+        store._apply_diffs(registry_diff, infra_diff, new_infra)
+        click.echo(infra_diff.to_string())
+    else:
+        store.apply(all_to_apply, objects_to_delete=all_to_delete, partial=False)
+        log_infra_changes(views_to_keep, views_to_delete)
+
+
+def log_infra_changes(
+    views_to_keep: Set[FeatureView], views_to_delete: Set[FeatureView]
+):
+    from colorama import Fore, Style
+
+    for view in views_to_keep:
+        click.echo(
+            f"Deploying infrastructure for {Style.BRIGHT + Fore.GREEN}{view.name}{Style.RESET_ALL}"
+        )
+    for view in views_to_delete:
+        click.echo(
+            f"Removing infrastructure for {Style.BRIGHT + Fore.RED}{view.name}{Style.RESET_ALL}"
+        )
 
 
 @log_exceptions_and_usage
@@ -242,62 +243,9 @@ def apply_total(repo_config: RepoConfig, repo_path: Path, skip_source_validation
 
     os.chdir(repo_path)
     project, registry, repo, store = _prepare_registry_and_repo(repo_config, repo_path)
-
-    if not skip_source_validation:
-        data_sources = [t.batch_source for t in repo.feature_views]
-        # Make sure the data source used by this feature view is supported by Feast
-        for data_source in data_sources:
-            data_source.validate(store.config)
-
-    # For each object in the registry, determine whether it should be kept or deleted.
-    (
-        all_to_apply,
-        all_to_delete,
-        views_to_delete,
-        views_to_keep,
-    ) = extract_objects_for_apply_delete(project, registry, repo)
-
-    diff = store.apply(all_to_apply, objects_to_delete=all_to_delete, partial=False)
-
-    log_cli_output(diff, views_to_delete, views_to_keep)
-
-
-def log_cli_output(diff, views_to_delete, views_to_keep):
-    from colorama import Fore, Style
-
-    message_action_map = {
-        TransitionType.CREATE: ("Created", Fore.GREEN),
-        TransitionType.DELETE: ("Deleted", Fore.RED),
-        TransitionType.UNCHANGED: ("Unchanged", Fore.LIGHTBLUE_EX),
-        TransitionType.UPDATE: ("Updated", Fore.YELLOW),
-    }
-    for fco_diff in diff.fco_diffs:
-        if fco_diff.name == DUMMY_ENTITY_NAME:
-            continue
-        action, color = message_action_map[fco_diff.transition_type]
-        click.echo(
-            f"{action} {fco_diff.fco_type} {Style.BRIGHT + color}{fco_diff.name}{Style.RESET_ALL}"
-        )
-        if fco_diff.transition_type == TransitionType.UPDATE:
-            for _p in fco_diff.fco_property_diffs:
-                click.echo(
-                    f"\t{_p.property_name}: {Style.BRIGHT + color}{_p.val_existing}{Style.RESET_ALL} -> {Style.BRIGHT + Fore.LIGHTGREEN_EX}{_p.val_declared}{Style.RESET_ALL}"
-                )
-
-    views_to_keep_in_infra = [
-        view for view in views_to_keep if isinstance(view, FeatureView)
-    ]
-    for name in [view.name for view in views_to_keep_in_infra]:
-        click.echo(
-            f"Deploying infrastructure for {Style.BRIGHT + Fore.GREEN}{name}{Style.RESET_ALL}"
-        )
-    views_to_delete_from_infra = [
-        view for view in views_to_delete if isinstance(view, FeatureView)
-    ]
-    for name in [view.name for view in views_to_delete_from_infra]:
-        click.echo(
-            f"Removing infrastructure for {Style.BRIGHT + Fore.RED}{name}{Style.RESET_ALL}"
-        )
+    apply_total_with_repo_instance(
+        store, project, registry, repo, skip_source_validation
+    )
 
 
 @log_exceptions_and_usage
@@ -322,7 +270,7 @@ def registry_dump(repo_config: RepoConfig, repo_path: Path):
         "breaking changes in the future. No guarantees are made on this interface."
     )
     click.echo(f"{Style.BRIGHT}{Fore.YELLOW}{warning}{Style.RESET_ALL}")
-    click.echo(json.dumps(registry_dict, indent=2))
+    click.echo(json.dumps(registry_dict, indent=2, sort_keys=True))
 
 
 def cli_check_repo(repo_path: Path):
@@ -375,6 +323,7 @@ def init_repo(repo_name: str, template: str):
         import importlib.util
 
         spec = importlib.util.spec_from_file_location("bootstrap", str(bootstrap_path))
+        assert isinstance(spec, ModuleSpec)
         bootstrap = importlib.util.module_from_spec(spec)
         assert isinstance(spec.loader, Loader)
         spec.loader.exec_module(bootstrap)

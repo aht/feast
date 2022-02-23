@@ -1,10 +1,14 @@
-from typing import Callable, Dict, Iterable, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from feast import type_map
 from feast.data_source import DataSource
 from feast.errors import DataSourceNotFoundException
 from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
+from feast.protos.feast.core.SavedDataset_pb2 import (
+    SavedDatasetStorage as SavedDatasetStorageProto,
+)
 from feast.repo_config import RepoConfig
+from feast.saved_dataset import SavedDatasetStorage
 from feast.value_type import ValueType
 
 
@@ -119,18 +123,20 @@ class BigQuerySource(DataSource):
 
         client = bigquery.Client()
         if self.table_ref is not None:
-            table_schema = client.get_table(self.table_ref).schema
-            if not isinstance(table_schema[0], bigquery.schema.SchemaField):
+            schema = client.get_table(self.table_ref).schema
+            if not isinstance(schema[0], bigquery.schema.SchemaField):
                 raise TypeError("Could not parse BigQuery table schema.")
-
-            name_type_pairs = [(field.name, field.field_type) for field in table_schema]
         else:
             bq_columns_query = f"SELECT * FROM ({self.query}) LIMIT 1"
             queryRes = client.query(bq_columns_query).result()
-            name_type_pairs = [
-                (schema_field.name, schema_field.field_type)
-                for schema_field in queryRes.schema
-            ]
+            schema = queryRes.schema
+
+        name_type_pairs: List[Tuple[str, str]] = []
+        for field in schema:
+            bq_type_as_str = field.field_type
+            if field.mode == "REPEATED":
+                bq_type_as_str = "ARRAY<" + bq_type_as_str + ">"
+            name_type_pairs.append((field.name, bq_type_as_str))
 
         return name_type_pairs
 
@@ -204,3 +210,28 @@ class BigQueryOptions:
         )
 
         return bigquery_options_proto
+
+
+class SavedDatasetBigQueryStorage(SavedDatasetStorage):
+    _proto_attr_name = "bigquery_storage"
+
+    bigquery_options: BigQueryOptions
+
+    def __init__(self, table_ref: str):
+        self.bigquery_options = BigQueryOptions(table_ref=table_ref, query=None)
+
+    @staticmethod
+    def from_proto(storage_proto: SavedDatasetStorageProto) -> SavedDatasetStorage:
+        return SavedDatasetBigQueryStorage(
+            table_ref=BigQueryOptions.from_proto(
+                storage_proto.bigquery_storage
+            ).table_ref
+        )
+
+    def to_proto(self) -> SavedDatasetStorageProto:
+        return SavedDatasetStorageProto(
+            bigquery_storage=self.bigquery_options.to_proto()
+        )
+
+    def to_data_source(self) -> DataSource:
+        return BigQuerySource(table_ref=self.bigquery_options.table_ref)

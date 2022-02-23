@@ -1,35 +1,48 @@
+import os
 import tempfile
 import uuid
 from contextlib import contextmanager
-from pathlib import Path, PosixPath
+from pathlib import Path
 from textwrap import dedent
+from typing import List
 
 import pytest
 import yaml
 from assertpy import assertpy
 
 from feast import FeatureStore, RepoConfig
-from tests.integration.feature_repos.repo_configuration import FULL_REPO_CONFIGS
+from tests.integration.feature_repos.integration_test_repo_config import (
+    IntegrationTestRepoConfig,
+)
+from tests.integration.feature_repos.repo_configuration import Environment
 from tests.integration.feature_repos.universal.data_source_creator import (
     DataSourceCreator,
+)
+from tests.integration.feature_repos.universal.data_sources.bigquery import (
+    BigQueryDataSourceCreator,
+)
+from tests.integration.feature_repos.universal.data_sources.file import (
+    FileDataSourceCreator,
+)
+from tests.integration.feature_repos.universal.data_sources.redshift import (
+    RedshiftDataSourceCreator,
 )
 from tests.utils.cli_utils import CliRunner, get_example_repo
 from tests.utils.online_read_write_test import basic_rw_test
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("test_repo_config", FULL_REPO_CONFIGS)
-def test_universal_cli(test_repo_config) -> None:
+@pytest.mark.universal
+def test_universal_cli(environment: Environment):
     project = f"test_universal_cli_{str(uuid.uuid4()).replace('-', '')[:8]}"
-
     runner = CliRunner()
 
     with tempfile.TemporaryDirectory() as repo_dir_name:
         try:
-            feature_store_yaml = make_feature_store_yaml(
-                project, test_repo_config, repo_dir_name
-            )
             repo_path = Path(repo_dir_name)
+            feature_store_yaml = make_feature_store_yaml(
+                project, environment.test_repo_config, repo_path
+            )
 
             repo_config = repo_path / "feature_store.yaml"
 
@@ -43,10 +56,9 @@ def test_universal_cli(test_repo_config) -> None:
             # Store registry contents, to be compared later.
             fs = FeatureStore(repo_path=str(repo_path))
             registry_dict = fs.registry.to_dict(project=project)
-
             # Save only the specs, not the metadata.
             registry_specs = {
-                key: [fco["spec"] for fco in value]
+                key: [fco["spec"] if "spec" in fco else fco for fco in value]
                 for key, value in registry_dict.items()
             }
 
@@ -92,7 +104,7 @@ def test_universal_cli(test_repo_config) -> None:
             registry_dict = fs.registry.to_dict(project=project)
             assertpy.assert_that(registry_specs).is_equal_to(
                 {
-                    key: [fco["spec"] for fco in value]
+                    key: [fco["spec"] if "spec" in fco else fco for fco in value]
                     for key, value in registry_dict.items()
                 }
             )
@@ -103,7 +115,7 @@ def test_universal_cli(test_repo_config) -> None:
             runner.run(["teardown"], cwd=repo_path)
 
 
-def make_feature_store_yaml(project, test_repo_config, repo_dir_name: PosixPath):
+def make_feature_store_yaml(project, test_repo_config, repo_dir_name: Path):
     offline_creator: DataSourceCreator = test_repo_config.offline_store_creator(project)
 
     offline_store_config = offline_creator.create_offline_store_config()
@@ -126,6 +138,56 @@ def make_feature_store_yaml(project, test_repo_config, repo_dir_name: PosixPath)
     config_dict["repo_path"] = str(config_dict["repo_path"])
 
     return yaml.safe_dump(config_dict)
+
+
+NULLABLE_ONLINE_STORE_CONFIGS: List[IntegrationTestRepoConfig] = [
+    IntegrationTestRepoConfig(
+        provider="local",
+        offline_store_creator=FileDataSourceCreator,
+        online_store=None,
+    ),
+]
+
+if os.getenv("FEAST_IS_LOCAL_TEST", "False") == "True":
+    NULLABLE_ONLINE_STORE_CONFIGS.extend(
+        [
+            IntegrationTestRepoConfig(
+                provider="gcp",
+                offline_store_creator=BigQueryDataSourceCreator,
+                online_store=None,
+            ),
+            IntegrationTestRepoConfig(
+                provider="aws",
+                offline_store_creator=RedshiftDataSourceCreator,
+                online_store=None,
+            ),
+        ]
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("test_nullable_online_store", NULLABLE_ONLINE_STORE_CONFIGS)
+def test_nullable_online_store(test_nullable_online_store) -> None:
+    project = f"test_nullable_online_store{str(uuid.uuid4()).replace('-', '')[:8]}"
+    runner = CliRunner()
+
+    with tempfile.TemporaryDirectory() as repo_dir_name:
+        try:
+            repo_path = Path(repo_dir_name)
+            feature_store_yaml = make_feature_store_yaml(
+                project, test_nullable_online_store, repo_path
+            )
+
+            repo_config = repo_path / "feature_store.yaml"
+
+            repo_config.write_text(dedent(feature_store_yaml))
+
+            repo_example = repo_path / "example.py"
+            repo_example.write_text(get_example_repo("example_feature_repo_1.py"))
+            result = runner.run(["apply"], cwd=repo_path)
+            assertpy.assert_that(result.returncode).is_equal_to(0)
+        finally:
+            runner.run(["teardown"], cwd=repo_path)
 
 
 @contextmanager

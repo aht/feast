@@ -74,6 +74,11 @@ class S3RegistryBucketForbiddenAccess(FeastObjectNotFoundException):
         super().__init__(f"S3 bucket {bucket} for the Feast registry can't be accessed")
 
 
+class SavedDatasetNotFound(FeastObjectNotFoundException):
+    def __init__(self, name: str, project: str):
+        super().__init__(f"Saved dataset {name} does not exist in project {project}")
+
+
 class FeastProviderLoginError(Exception):
     """Error class that indicates a user has not authenticated with their provider."""
 
@@ -238,6 +243,23 @@ class RedshiftQueryError(Exception):
         super().__init__(f"Redshift SQL Query failed to finish. Details: {details}")
 
 
+class RedshiftTableNameTooLong(Exception):
+    def __init__(self, table_name: str):
+        super().__init__(
+            f"Redshift table names have a maximum length of 127 characters, but the table name {table_name} has length {len(table_name)} characters."
+        )
+
+
+class SnowflakeCredentialsError(Exception):
+    def __init__(self):
+        super().__init__("Snowflake Connector failed due to incorrect credentials")
+
+
+class SnowflakeQueryError(Exception):
+    def __init__(self, details):
+        super().__init__(f"Snowflake SQL Query failed to finish. Details: {details}")
+
+
 class EntityTimestampInferenceException(Exception):
     def __init__(self, expected_column_name: str):
         super().__init__(
@@ -293,3 +315,18 @@ class IncompatibleRegistryStoreClass(Exception):
         super().__init__(
             f"The registry store class was expected to be {expected_class}, but was instead {actual_class}."
         )
+
+
+class FeastInvalidInfraObjectType(Exception):
+    def __init__(self):
+        super().__init__("Could not identify the type of the InfraObject.")
+
+
+class SnowflakeIncompleteConfig(Exception):
+    def __init__(self, e: KeyError):
+        super().__init__(f"{e} not defined in a config file or feature_store.yaml file")
+
+
+class SnowflakeQueryUnknownError(Exception):
+    def __init__(self, query: str):
+        super().__init__(f"Snowflake query failed: {query}")

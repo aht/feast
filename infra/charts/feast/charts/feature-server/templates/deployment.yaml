@@ -21,6 +21,9 @@ spec:
       annotations:
         checksum/configmap: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- if .Values.podAnnotations }}
+        {{ toYaml .Values.podAnnotations | nindent 8 }}
+      {{- end }}
       labels:
         app: {{ template "feature-server.name" . }}
         component: serving
@@ -89,7 +92,7 @@ spec:
         - java
         - -jar
         - /opt/feast/feast-serving.jar
-        - {{- if index .Values "application.yaml" "enabled" -}}
+        - {{ if index .Values "application.yaml" "enabled" -}}
           classpath:/application.yml
           {{- end }}
           {{- if index .Values "application-generated.yaml" "enabled" -}}

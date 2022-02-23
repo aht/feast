@@ -1,10 +1,11 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List
+from typing import Any, Dict, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from feast.infra.offline_stores.offline_store import RetrievalJob
@@ -28,6 +29,7 @@ def populate_test_configs(offline: bool):
         (ValueType.INT64, "int64"),
         (ValueType.STRING, "float"),
         (ValueType.STRING, "bool"),
+        (ValueType.INT32, "datetime"),
     ]
     configs: List[TypeTestConfig] = []
     for test_repo_config in FULL_REPO_CONFIGS:
@@ -217,9 +219,14 @@ def test_feature_get_online_features_types_match(online_types_test_fixtures):
     )
     fs = environment.feature_store
     features = [fv.name + ":value"]
-    entity = driver(value_type=ValueType.UNKNOWN)
+    entity = driver(value_type=config.entity_type)
     fs.apply([fv, entity])
-    fs.materialize(environment.start_date, environment.end_date)
+    fs.materialize(
+        environment.start_date,
+        environment.end_date
+        - timedelta(hours=1)  # throwing out last record to make sure
+        # we can successfully infer type even from all empty values
+    )
 
     driver_id_value = "1" if config.entity_type == ValueType.STRING else 1
     online_features = fs.get_online_features(
@@ -232,13 +239,20 @@ def test_feature_get_online_features_types_match(online_types_test_fixtures):
         "float": float,
         "string": str,
         "bool": bool,
+        "datetime": datetime,
     }
     expected_dtype = feature_list_dtype_to_expected_online_response_value_type[
         config.feature_dtype
     ]
+
+    assert len(online_features["value"]) == 1
+
     if config.feature_is_list:
         for feature in online_features["value"]:
-            assert isinstance(feature, list)
+            assert isinstance(feature, list), "Feature value should be a list"
+            assert (
+                config.has_empty_list or len(feature) > 0
+            ), "List of values should not be empty"
             for element in feature:
                 assert isinstance(element, expected_dtype)
     else:
@@ -258,6 +272,8 @@ def create_feature_view(
             value_type = ValueType.FLOAT_LIST
         elif feature_dtype == "bool":
             value_type = ValueType.BOOL_LIST
+        elif feature_dtype == "datetime":
+            value_type = ValueType.UNIX_TIMESTAMP_LIST
     else:
         if feature_dtype == "int32":
             value_type = ValueType.INT32
@@ -267,6 +283,8 @@ def create_feature_view(
             value_type = ValueType.FLOAT
         elif feature_dtype == "bool":
             value_type = ValueType.BOOL
+        elif feature_dtype == "datetime":
+            value_type = ValueType.UNIX_TIMESTAMP
 
     return driver_feature_view(data_source, name=name, value_type=value_type,)
 
@@ -281,6 +299,7 @@ def assert_expected_historical_feature_types(
         "float": (pd.api.types.is_float_dtype,),
         "string": (pd.api.types.is_string_dtype,),
         "bool": (pd.api.types.is_bool_dtype, pd.api.types.is_object_dtype),
+        "datetime": (pd.api.types.is_datetime64_any_dtype,),
     }
     dtype_checkers = feature_dtype_to_expected_historical_feature_dtype[feature_dtype]
     assert any(
@@ -292,7 +311,9 @@ def assert_feature_list_types(
     provider: str, feature_dtype: str, historical_features_df: pd.DataFrame
 ):
     print("Asserting historical feature list types")
-    feature_list_dtype_to_expected_historical_feature_list_dtype = {
+    feature_list_dtype_to_expected_historical_feature_list_dtype: Dict[
+        str, Union[type, Tuple[Union[type, Tuple[Any, ...]], ...]]
+    ] = {
         "int32": (
             int,
             np.int64,
@@ -307,6 +328,7 @@ def assert_feature_list_types(
             bool,
             np.bool_,
         ),  # Can be `np.bool_` if from `np.array` rather that `list`
+        "datetime": np.datetime64,
     }
     expected_dtype = feature_list_dtype_to_expected_historical_feature_list_dtype[
         feature_dtype
@@ -328,22 +350,21 @@ def assert_expected_arrow_types(
     historical_features_arrow = historical_features.to_arrow()
     print(historical_features_arrow)
     feature_list_dtype_to_expected_historical_feature_arrow_type = {
-        "int32": "int64",
-        "int64": "int64",
-        "float": "double",
-        "string": "string",
-        "bool": "bool",
+        "int32": pa.types.is_int64,
+        "int64": pa.types.is_int64,
+        "float": pa.types.is_float64,
+        "string": pa.types.is_string,
+        "bool": pa.types.is_boolean,
+        "date": pa.types.is_date,
+        "datetime": pa.types.is_timestamp,
     }
-    arrow_type = feature_list_dtype_to_expected_historical_feature_arrow_type[
+    arrow_type_checker = feature_list_dtype_to_expected_historical_feature_arrow_type[
         feature_dtype
     ]
+    pa_type = historical_features_arrow.schema.field("value").type
+
     if feature_is_list:
-        assert (
-            str(historical_features_arrow.schema.field_by_name("value").type)
-            == f"list<item: {arrow_type}>"
-        )
+        assert pa.types.is_list(pa_type)
+        assert arrow_type_checker(pa_type.value_type)
     else:
-        assert (
-            str(historical_features_arrow.schema.field_by_name("value").type)
-            == arrow_type
-        )
+        assert arrow_type_checker(pa_type)

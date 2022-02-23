@@ -1,4 +1,5 @@
-from typing import Dict, Optional
+import uuid
+from typing import Dict, List, Optional
 
 import pandas as pd
 from google.cloud import bigquery
@@ -7,6 +8,7 @@ from google.cloud.bigquery import Dataset
 from feast import BigQuerySource
 from feast.data_source import DataSource
 from feast.infra.offline_stores.bigquery import BigQueryOfflineStoreConfig
+from feast.infra.offline_stores.bigquery_source import SavedDatasetBigQueryStorage
 from tests.integration.feature_repos.universal.data_source_creator import (
     DataSourceCreator,
 )
@@ -21,7 +23,7 @@ class BigQueryDataSourceCreator(DataSourceCreator):
         self.gcp_project = self.client.project
         self.dataset_id = f"{self.gcp_project}.{project_name}"
 
-        self.tables = []
+        self.tables: List[str] = []
 
     def create_dataset(self):
         if not self.dataset:
@@ -50,7 +52,7 @@ class BigQueryDataSourceCreator(DataSourceCreator):
     def create_data_source(
         self,
         df: pd.DataFrame,
-        destination_name: Optional[str] = None,
+        destination_name: str,
         event_timestamp_column="ts",
         created_timestamp_column="created_ts",
         field_mapping: Dict[str, str] = None,
@@ -78,6 +80,12 @@ class BigQueryDataSourceCreator(DataSourceCreator):
             date_partition_column="",
             field_mapping=field_mapping or {"ts_1": "ts"},
         )
+
+    def create_saved_dataset_destination(self) -> SavedDatasetBigQueryStorage:
+        table = self.get_prefixed_table_name(
+            f"persisted_{str(uuid.uuid4()).replace('-', '_')}"
+        )
+        return SavedDatasetBigQueryStorage(table_ref=table)
 
     def get_prefixed_table_name(self, suffix: str) -> str:
         return f"{self.client.project}.{self.project_name}.{suffix}"

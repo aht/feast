@@ -20,7 +20,7 @@ from pydantic import StrictStr
 from pydantic.typing import Literal
 
 from feast import Entity, FeatureView, utils
-from feast.infra.infra_object import InfraObject
+from feast.infra.infra_object import DYNAMODB_INFRA_OBJECT_CLASS_TYPE, InfraObject
 from feast.infra.online_stores.helpers import compute_entity_id
 from feast.infra.online_stores.online_store import OnlineStore
 from feast.protos.feast.core.DynamoDBTable_pb2 import (
@@ -183,7 +183,7 @@ class DynamoDBOnlineStore(OnlineStore):
                     val = ValueProto()
                     val.ParseFromString(value_bin['B'])
                     res[feature_name] = val
-                result.append((item["event_ts"]['S'], res))
+                result.append((datetime.fromisoformat(item["event_ts"]['S']), res))
             else:
                 result.append((None, None))
         return result
@@ -324,28 +324,36 @@ class DynamoDBTable(InfraObject):
         region: The region of the table.
     """
 
-    name: str
     region: str
 
     def __init__(self, name: str, region: str):
-        self.name = name
+        super().__init__(name)
         self.region = region
 
-    def to_proto(self) -> InfraObjectProto:
-        dynamodb_table_proto = DynamoDBTableProto()
-        dynamodb_table_proto.name = self.name
-        dynamodb_table_proto.region = self.region
-
+    def to_infra_object_proto(self) -> InfraObjectProto:
+        dynamodb_table_proto = self.to_proto()
         return InfraObjectProto(
-            infra_object_class_type="feast.infra.online_stores.dynamodb.DynamoDBTable",
+            infra_object_class_type=DYNAMODB_INFRA_OBJECT_CLASS_TYPE,
             dynamodb_table=dynamodb_table_proto,
         )
 
+    def to_proto(self) -> Any:
+        dynamodb_table_proto = DynamoDBTableProto()
+        dynamodb_table_proto.name = self.name
+        dynamodb_table_proto.region = self.region
+        return dynamodb_table_proto
+
     @staticmethod
-    def from_proto(infra_object_proto: InfraObjectProto) -> Any:
+    def from_infra_object_proto(infra_object_proto: InfraObjectProto) -> Any:
         return DynamoDBTable(
             name=infra_object_proto.dynamodb_table.name,
             region=infra_object_proto.dynamodb_table.region,
+        )
+
+    @staticmethod
+    def from_proto(dynamodb_table_proto: DynamoDBTableProto) -> Any:
+        return DynamoDBTable(
+            name=dynamodb_table_proto.name, region=dynamodb_table_proto.region,
         )
 
     def update(self):

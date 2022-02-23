@@ -74,7 +74,7 @@ abstract class ServingBaseTests extends ServingEnvironment {
 
   @Test
   public void shouldGetOnlineFeatures() {
-    ServingAPIProto.GetOnlineFeaturesResponseV2 featureResponse =
+    ServingAPIProto.GetOnlineFeaturesResponse featureResponse =
         servingStub.getOnlineFeatures(buildOnlineRequest(1005));
 
     assertEquals(2, featureResponse.getResultsCount());
@@ -96,7 +96,7 @@ abstract class ServingBaseTests extends ServingEnvironment {
 
   @Test
   public void shouldGetOnlineFeaturesWithOutsideMaxAgeStatus() {
-    ServingAPIProto.GetOnlineFeaturesResponseV2 featureResponse =
+    ServingAPIProto.GetOnlineFeaturesResponse featureResponse =
         servingStub.getOnlineFeatures(buildOnlineRequest(1001));
 
     assertEquals(2, featureResponse.getResultsCount());
@@ -113,7 +113,7 @@ abstract class ServingBaseTests extends ServingEnvironment {
 
   @Test
   public void shouldGetOnlineFeaturesWithNotFoundStatus() {
-    ServingAPIProto.GetOnlineFeaturesResponseV2 featureResponse =
+    ServingAPIProto.GetOnlineFeaturesResponse featureResponse =
         servingStub.getOnlineFeatures(buildOnlineRequest(-1));
 
     assertEquals(2, featureResponse.getResultsCount());
@@ -155,6 +155,29 @@ abstract class ServingBaseTests extends ServingEnvironment {
         .until(
             () -> servingStub.getOnlineFeatures(requestWithNewFeature).getResultsCount(),
             equalTo(3));
+  }
+
+  /** https://github.com/feast-dev/feast/issues/2253 */
+  @Test
+  public void shouldGetOnlineFeaturesWithStringEntity() {
+    Map<String, ValueProto.RepeatedValue> entityRows =
+        ImmutableMap.of(
+            "entity",
+            ValueProto.RepeatedValue.newBuilder()
+                .addVal(DataGenerator.createStrValue("key-1"))
+                .build());
+
+    ImmutableList<String> featureReferences =
+        ImmutableList.of("feature_view_0:feature_0", "feature_view_0:feature_1");
+
+    ServingAPIProto.GetOnlineFeaturesRequest req =
+        TestUtils.createOnlineFeatureRequest(featureReferences, entityRows);
+
+    ServingAPIProto.GetOnlineFeaturesResponse resp = servingStub.getOnlineFeatures(req);
+
+    for (final int featureIdx : List.of(0, 1)) {
+      assertEquals(FieldStatus.PRESENT, resp.getResults(featureIdx).getStatuses(0));
+    }
   }
 
   abstract void updateRegistryFile(RegistryProto.Registry registry);

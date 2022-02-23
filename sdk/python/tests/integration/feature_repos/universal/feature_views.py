@@ -20,7 +20,7 @@ def driver_feature_view(
         entities=["driver"],
         features=None if infer_features else [Feature("value", value_type)],
         ttl=timedelta(days=5),
-        input=data_source,
+        batch_source=data_source,
     )
 
 
@@ -35,7 +35,7 @@ def global_feature_view(
         entities=[],
         features=None if infer_features else [Feature("entityless_value", value_type)],
         ttl=timedelta(days=5),
-        input=data_source,
+        batch_source=data_source,
     )
 
 
@@ -217,3 +217,13 @@ def create_location_stats_feature_view(source, infer_features: bool = False):
         ttl=timedelta(days=2),
     )
     return location_stats_feature_view
+
+
+def create_field_mapping_feature_view(source):
+    return FeatureView(
+        name="field_mapping",
+        entities=[],
+        features=[Feature(name="feature_name", dtype=ValueType.INT32)],
+        batch_source=source,
+        ttl=timedelta(days=2),
+    )

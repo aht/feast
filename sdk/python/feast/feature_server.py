@@ -1,4 +1,5 @@
-import click
+import traceback
+
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.logger import logger
@@ -8,7 +9,6 @@ from google.protobuf.json_format import MessageToDict, Parse
 import feast
 from feast import proto_json
 from feast.protos.feast.serving.ServingService_pb2 import GetOnlineFeaturesRequest
-from feast.type_map import feast_value_type_to_python_type
 
 
 def get_app(store: "feast.FeatureStore"):
@@ -41,16 +41,11 @@ def get_app(store: "feast.FeatureStore"):
             if any(batch_size != num_entities for batch_size in batch_sizes):
                 raise HTTPException(status_code=500, detail="Uneven number of columns")
 
-            entity_rows = [
-                {
-                    k: feast_value_type_to_python_type(v.val[idx])
-                    for k, v in request_proto.entities.items()
-                }
-                for idx in range(num_entities)
-            ]
-
-            response_proto = store.get_online_features(
-                features, entity_rows, full_feature_names=full_feature_names
+            response_proto = store._get_online_features(
+                features,
+                request_proto.entities,
+                full_feature_names=full_feature_names,
+                native_entity_values=False,
             ).proto
 
             # Convert the Protobuf object to JSON and return it
@@ -59,7 +54,7 @@ def get_app(store: "feast.FeatureStore"):
             )
         except Exception as e:
             # Print the original exception on the server side
-            logger.exception(e)
+            logger.exception(traceback.format_exc())
             # Raise HTTPException to return the error message to the client
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -70,9 +65,4 @@ def start_server(
     store: "feast.FeatureStore", host: str, port: int, no_access_log: bool
 ):
     app = get_app(store)
-    click.echo(
-        "This is an "
-        + click.style("experimental", fg="yellow", bold=True, underline=True)
-        + " feature. It's intended for early testing and feedback, and could change without warnings in future releases."
-    )
     uvicorn.run(app, host=host, port=port, access_log=(not no_access_log))

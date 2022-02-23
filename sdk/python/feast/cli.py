@@ -477,7 +477,7 @@ def materialize_incremental_command(ctx: click.Context, end_ts: str, views: List
 @click.option(
     "--template",
     "-t",
-    type=click.Choice(["local", "gcp", "aws"], case_sensitive=False),
+    type=click.Choice(["local", "gcp", "aws", "snowflake"], case_sensitive=False),
     help="Specify a template for the created project",
     default="local",
 )
@@ -512,7 +512,7 @@ def init_command(project_directory, minimal: bool, template: str):
 )
 @click.pass_context
 def serve_command(ctx: click.Context, host: str, port: int, no_access_log: bool):
-    """[Experimental] Start a the feature consumption server locally on a given port."""
+    """Start a feature server locally on a given port."""
     repo = ctx.obj["CHDIR"]
     cli_check_repo(repo)
     store = FeatureStore(repo_path=str(repo))

@@ -1,7 +1,14 @@
 import re
 from typing import List
 
-from feast import BigQuerySource, Entity, Feature, FileSource, RedshiftSource
+from feast import (
+    BigQuerySource,
+    Entity,
+    Feature,
+    FileSource,
+    RedshiftSource,
+    SnowflakeSource,
+)
 from feast.data_source import DataSource
 from feast.errors import RegistryInferenceFailure
 from feast.feature_view import FeatureView
@@ -13,7 +20,12 @@ def update_entities_with_inferred_types_from_feature_views(
     entities: List[Entity], feature_views: List[FeatureView], config: RepoConfig
 ) -> None:
     """
-    Infer entity value type by examining schema of feature view batch sources
+    Infers the types of the entities by examining the schemas of feature view batch sources.
+
+    Args:
+        entities: The entities to be updated.
+        feature_views: A list containing feature views associated with the entities.
+        config: The config for the current feature store.
     """
     incomplete_entities = {
         entity.name: entity
@@ -78,6 +90,8 @@ def update_data_sources_with_inferred_event_timestamp_col(
                 ts_column_type_regex_pattern = "TIMESTAMP|DATETIME"
             elif isinstance(data_source, RedshiftSource):
                 ts_column_type_regex_pattern = "TIMESTAMP[A-Z]*"
+            elif isinstance(data_source, SnowflakeSource):
+                ts_column_type_regex_pattern = "TIMESTAMP_[A-Z]*"
             else:
                 raise RegistryInferenceFailure(
                     "DataSource",
@@ -87,8 +101,10 @@ def update_data_sources_with_inferred_event_timestamp_col(
                     """,
                 )
             #  for informing the type checker
-            assert isinstance(data_source, FileSource) or isinstance(
-                data_source, BigQuerySource
+            assert (
+                isinstance(data_source, FileSource)
+                or isinstance(data_source, BigQuerySource)
+                or isinstance(data_source, SnowflakeSource)
             )
 
             # loop through table columns to find singular match
@@ -127,6 +143,11 @@ def update_feature_views_with_inferred_features(
     Infers the set of features associated to each FeatureView and updates the FeatureView with those features.
     Inference occurs through considering each column of the underlying data source as a feature except columns that are
     associated with the data source's timestamp columns and the FeatureView's entity columns.
+
+    Args:
+        fvs: The feature views to be updated.
+        entities: A list containing entities associated with the feature views.
+        config: The config for the current feature store.
     """
     entity_name_to_join_key_map = {entity.name: entity.join_key for entity in entities}
 

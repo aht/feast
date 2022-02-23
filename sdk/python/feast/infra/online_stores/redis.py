@@ -41,7 +41,7 @@ from feast.usage import log_exceptions_and_usage, tracing_span
 
 try:
     from redis import Redis
-    from rediscluster import RedisCluster
+    from redis.cluster import ClusterNode, RedisCluster
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
 
@@ -72,11 +72,11 @@ class RedisOnlineStoreConfig(FeastConfigBaseModel):
 class RedisOnlineStore(OnlineStore):
     _client: Optional[Union[Redis, RedisCluster]] = None
 
-    def delete_table_values(self, config: RepoConfig, table: FeatureView):
+    def delete_entity_values(self, config: RepoConfig, join_keys: List[str]):
         client = self._get_client(config.online_store)
         deleted_count = 0
-        pipeline = client.pipeline()
-        prefix = _redis_key_prefix(table.entities)
+        pipeline = client.pipeline(transaction=False)
+        prefix = _redis_key_prefix(join_keys)
 
         for _k in client.scan_iter(
             b"".join([prefix, b"*", config.project.encode("utf8")])
@@ -85,7 +85,7 @@ class RedisOnlineStore(OnlineStore):
             deleted_count += 1
         pipeline.execute()
 
-        logger.debug(f"Deleted {deleted_count} keys for {table.name}")
+        logger.debug(f"Deleted {deleted_count} rows for entity {', '.join(join_keys)}")
 
     @log_exceptions_and_usage(online_store="redis")
     def update(
@@ -98,10 +98,16 @@ class RedisOnlineStore(OnlineStore):
         partial: bool,
     ):
         """
-        We delete the keys in redis for tables/views being removed.
+        Look for join_keys (list of entities) that are not in use anymore
+        (usually this happens when the last feature view that was using specific compound key is deleted)
+        and remove all features attached to this "join_keys".
         """
-        for table in tables_to_delete:
-            self.delete_table_values(config, table)
+        join_keys_to_keep = set(tuple(table.entities) for table in tables_to_keep)
+
+        join_keys_to_delete = set(tuple(table.entities) for table in tables_to_delete)
+
+        for join_keys in join_keys_to_delete - join_keys_to_keep:
+            self.delete_entity_values(config, list(join_keys))
 
     def teardown(
         self,
@@ -112,8 +118,10 @@ class RedisOnlineStore(OnlineStore):
         """
         We delete the keys in redis for tables/views being removed.
         """
-        for table in tables:
-            self.delete_table_values(config, table)
+        join_keys_to_delete = set(tuple(table.entities) for table in tables)
+
+        for join_keys in join_keys_to_delete:
+            self.delete_entity_values(config, list(join_keys))
 
     @staticmethod
     def _parse_connection_string(connection_string: str):
@@ -152,7 +160,9 @@ class RedisOnlineStore(OnlineStore):
                 online_store_config.connection_string
             )
             if online_store_config.redis_type == RedisType.redis_cluster:
-                kwargs["startup_nodes"] = startup_nodes
+                kwargs["startup_nodes"] = [
+                    ClusterNode(**node) for node in startup_nodes
+                ]
                 self._client = RedisCluster(**kwargs)
             else:
                 kwargs["host"] = startup_nodes[0]["host"]
@@ -180,7 +190,7 @@ class RedisOnlineStore(OnlineStore):
         ts_key = f"_ts:{feature_view}"
         keys = []
         # redis pipelining optimization: send multiple commands to redis server without waiting for every reply
-        with client.pipeline() as pipe:
+        with client.pipeline(transaction=False) as pipe:
             # check if a previous record under the key bin exists
             # TODO: investigate if check and set is a better approach rather than pulling all entity ts and then setting
             # it may be significantly slower but avoids potential (rare) race conditions
@@ -254,7 +264,7 @@ class RedisOnlineStore(OnlineStore):
         for entity_key in entity_keys:
             redis_key_bin = _redis_key(project, entity_key)
             keys.append(redis_key_bin)
-        with client.pipeline() as pipe:
+        with client.pipeline(transaction=False) as pipe:
             for redis_key_bin in keys:
                 pipe.hmget(redis_key_bin, hset_keys)
             with tracing_span(name="remote_call"):
@@ -277,13 +287,13 @@ class RedisOnlineStore(OnlineStore):
         res_ts = Timestamp()
         ts_val = res_val.pop(f"_ts:{feature_view}")
         if ts_val:
-            res_ts.ParseFromString(ts_val)
+            res_ts.ParseFromString(bytes(ts_val))
 
         res = {}
         for feature_name, val_bin in res_val.items():
             val = ValueProto()
             if val_bin:
-                val.ParseFromString(val_bin)
+                val.ParseFromString(bytes(val_bin))
             res[feature_name] = val
 
         if not res:

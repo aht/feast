@@ -31,12 +31,14 @@ ONLINE_STORE_CLASS_FOR_TYPE = {
     "datastore": "feast.infra.online_stores.datastore.DatastoreOnlineStore",
     "redis": "feast.infra.online_stores.redis.RedisOnlineStore",
     "dynamodb": "feast.infra.online_stores.dynamodb.DynamoDBOnlineStore",
+    "snowflake.online": "feast.infra.online_stores.snowflake.SnowflakeOnlineStore",
 }
 
 OFFLINE_STORE_CLASS_FOR_TYPE = {
     "file": "feast.infra.offline_stores.file.FileOfflineStore",
     "bigquery": "feast.infra.offline_stores.bigquery.BigQueryOfflineStore",
     "redshift": "feast.infra.offline_stores.redshift.RedshiftOfflineStore",
+    "snowflake.offline": "feast.infra.offline_stores.snowflake.SnowflakeOfflineStore",
 }
 
 FEATURE_SERVER_CONFIG_CLASS_FOR_TYPE = {
@@ -152,8 +154,12 @@ class RepoConfig(FeastBaseModel):
         if "online_store" not in values:
             values["online_store"] = dict()
 
-        # Skip if we aren't creating the configuration from a dict
+        # Skip if we aren't creating the configuration from a dict or online store is null or it is a string like "None" or "null"
         if not isinstance(values["online_store"], Dict):
+            if isinstance(values["online_store"], str) and values[
+                "online_store"
+            ].lower() in {"none", "null"}:
+                values["online_store"] = None
             return values
 
         # Make sure that the provider configuration is set. We need it to set the defaults

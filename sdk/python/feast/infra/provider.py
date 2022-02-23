@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
+import dask.dataframe as dd
 import pandas
 import pyarrow
 from tqdm import tqdm
@@ -12,12 +13,15 @@ from feast import errors
 from feast.entity import Entity
 from feast.feature_view import DUMMY_ENTITY_ID, FeatureView
 from feast.importer import import_class
+from feast.infra.infra_object import Infra
 from feast.infra.offline_stores.offline_store import RetrievalJob
 from feast.on_demand_feature_view import OnDemandFeatureView
+from feast.protos.feast.core.Registry_pb2 import Registry as RegistryProto
 from feast.protos.feast.types.EntityKey_pb2 import EntityKey as EntityKeyProto
 from feast.protos.feast.types.Value_pb2 import Value as ValueProto
 from feast.registry import Registry
 from feast.repo_config import RepoConfig
+from feast.saved_dataset import SavedDataset
 from feast.type_map import python_values_to_proto_values
 from feast.value_type import ValueType
 
@@ -60,6 +64,18 @@ class Provider(abc.ABC):
                 There may be other tables that are not touched by this update.
         """
         ...
+
+    def plan_infra(
+        self, config: RepoConfig, desired_registry_proto: RegistryProto
+    ) -> Infra:
+        """
+        Returns the Infra required to support the desired registry.
+
+        Args:
+            config: The RepoConfig for the current FeatureStore.
+            desired_registry_proto: The desired registry, in proto form.
+        """
+        return Infra()
 
     @abc.abstractmethod
     def teardown_infra(
@@ -153,6 +169,21 @@ class Provider(abc.ABC):
             of event_ts for the row, and the feature data as a dict from feature names to values.
             Values are returned as Value proto message.
         """
+        ...
+
+    @abc.abstractmethod
+    def retrieve_saved_dataset(
+        self, config: RepoConfig, dataset: SavedDataset
+    ) -> RetrievalJob:
+        """
+        Read saved dataset from offline store.
+        All parameters for retrieval (like path, datetime boundaries, column names for both keys and features, etc)
+        are determined from SavedDataset object.
+
+        Returns:
+             RetrievalJob object, which is lazy wrapper for actual query performed under the hood.
+
+         """
         ...
 
     def get_feature_server_endpoint(self) -> Optional[str]:
@@ -282,6 +313,17 @@ def _run_field_mapping(
     return table
 
 
+def _run_dask_field_mapping(
+    table: dd.DataFrame, field_mapping: Dict[str, str],
+):
+    if field_mapping:
+        # run field mapping in the forward direction
+        table = table.rename(columns=field_mapping)
+        table = table.persist()
+
+    return table
+
+
 def _coerce_datetime(ts):
     """
     Depending on underlying time resolution, arrow to_pydict() sometimes returns pandas
@@ -291,7 +333,6 @@ def _coerce_datetime(ts):
     same way. We convert it to normal datetime so that consumers downstream don't have to deal
     with these quirks.
     """
-
     if isinstance(ts, pandas.Timestamp):
         return ts.to_pydatetime()
     else:

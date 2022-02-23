@@ -1,6 +1,6 @@
 # feast-python-server
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square)
+![Version: 0.18.1](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square)
 
 Feast Feature Server in Python
 
@@ -56,16 +56,4 @@ RUN pip install pip --upgrade
 RUN pip install feast
 
 COPY feature_store.yaml /feature_store.yaml
-```
-
-Make sure that you have enabled the flags for the python server. Example `feature_store.yaml`:
-```
-project: feature_repo
-registry: data/registry.db
-provider: local
-online_store:
-    path: data/online_store.db
-flags:
-  alpha_features: true
-  python_feature_server: true
 ```

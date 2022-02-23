@@ -1,20 +1,22 @@
 import importlib
 import json
 import os
+import re
 import tempfile
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 import yaml
 
-from feast import FeatureStore, FeatureView, RepoConfig, driver_test_data
+from feast import FeatureStore, FeatureView, driver_test_data
 from feast.constants import FULL_REPO_CONFIGS_MODULE_ENV_NAME
 from feast.data_source import DataSource
 from feast.errors import FeastModuleImportError
+from feast.repo_config import RegistryConfig, RepoConfig
 from tests.integration.feature_repos.integration_test_repo_config import (
     IntegrationTestRepoConfig,
 )
@@ -27,12 +29,16 @@ from tests.integration.feature_repos.universal.data_sources.bigquery import (
 from tests.integration.feature_repos.universal.data_sources.redshift import (
     RedshiftDataSourceCreator,
 )
+from tests.integration.feature_repos.universal.data_sources.snowflake import (
+    SnowflakeDataSourceCreator,
+)
 from tests.integration.feature_repos.universal.feature_views import (
     conv_rate_plus_100_feature_view,
     create_conv_rate_request_data_source,
     create_customer_daily_profile_feature_view,
     create_driver_age_request_feature_view,
     create_driver_hourly_stats_feature_view,
+    create_field_mapping_feature_view,
     create_global_stats_feature_view,
     create_location_stats_feature_view,
     create_order_feature_view,
@@ -40,6 +46,12 @@ from tests.integration.feature_repos.universal.feature_views import (
 
 DYNAMO_CONFIG = {"type": "dynamodb", "region": "us-west-2"}
 REDIS_CONFIG = {"type": "redis", "connection_string": "localhost:6379,db=0"}
+REDIS_CLUSTER_CONFIG = {
+    "type": "redis",
+    "redis_type": "redis_cluster",
+    # Redis Cluster Port Forwarding is setup in "pr_integration_tests.yaml" under "Setup Redis Cluster".
+    "connection_string": "127.0.0.1:6001,127.0.0.1:6002,127.0.0.1:6003",
+}
 
 # FULL_REPO_CONFIGS contains the repo configurations (e.g. provider, offline store,
 # online store, test data, and more parameters) that most integration tests will test
@@ -51,10 +63,12 @@ REDIS_CONFIG = {"type": "redis", "connection_string": "localhost:6379,db=0"}
 DEFAULT_FULL_REPO_CONFIGS: List[IntegrationTestRepoConfig] = [
     # Local configurations
     IntegrationTestRepoConfig(),
+    IntegrationTestRepoConfig(python_feature_server=True),
 ]
 if os.getenv("FEAST_IS_LOCAL_TEST", "False") != "True":
     DEFAULT_FULL_REPO_CONFIGS.extend(
         [
+            # Redis configurations
             IntegrationTestRepoConfig(online_store=REDIS_CONFIG),
             # GCP configurations
             IntegrationTestRepoConfig(
@@ -77,6 +91,12 @@ if os.getenv("FEAST_IS_LOCAL_TEST", "False") != "True":
             IntegrationTestRepoConfig(
                 provider="aws",
                 offline_store_creator=RedshiftDataSourceCreator,
+                online_store=REDIS_CONFIG,
+            ),
+            # Snowflake configurations
+            IntegrationTestRepoConfig(
+                provider="aws",  # no list features, no feature server
+                offline_store_creator=SnowflakeDataSourceCreator,
                 online_store=REDIS_CONFIG,
             ),
         ]
@@ -123,6 +143,7 @@ def construct_universal_datasets(
         order_count=20,
     )
     global_df = driver_test_data.create_global_daily_stats_df(start_time, end_time)
+    field_mapping_df = driver_test_data.create_field_mapping_df(start_time, end_time)
     entity_df = orders_df[
         [
             "customer_id",
@@ -140,6 +161,7 @@ def construct_universal_datasets(
         "location": location_df,
         "orders": orders_df,
         "global": global_df,
+        "field_mapping": field_mapping_df,
         "entity": entity_df,
     }
 
@@ -177,12 +199,20 @@ def construct_universal_data_sources(
         event_timestamp_column="event_timestamp",
         created_timestamp_column="created",
     )
+    field_mapping_ds = data_source_creator.create_data_source(
+        datasets["field_mapping"],
+        destination_name="field_mapping",
+        event_timestamp_column="event_timestamp",
+        created_timestamp_column="created",
+        field_mapping={"column_name": "feature_name"},
+    )
     return {
         "customer": customer_ds,
         "driver": driver_ds,
         "location": location_ds,
         "orders": orders_ds,
         "global": global_ds,
+        "field_mapping": field_mapping_ds,
     }
 
 
@@ -207,6 +237,9 @@ def construct_universal_feature_views(
         "driver_age_request_fv": create_driver_age_request_feature_view(),
         "order": create_order_feature_view(data_sources["orders"]),
         "location": create_location_stats_feature_view(data_sources["location"]),
+        "field_mapping": create_field_mapping_feature_view(
+            data_sources["field_mapping"]
+        ),
     }
 
 
@@ -217,29 +250,42 @@ class Environment:
     feature_store: FeatureStore
     data_source_creator: DataSourceCreator
     python_feature_server: bool
-
-    end_date: datetime = field(
-        default=datetime.utcnow().replace(microsecond=0, second=0, minute=0)
-    )
+    worker_id: str
 
     def __post_init__(self):
+        self.end_date = datetime.utcnow().replace(microsecond=0, second=0, minute=0)
         self.start_date: datetime = self.end_date - timedelta(days=3)
+
+    def get_feature_server_endpoint(self) -> str:
+        if self.python_feature_server and self.test_repo_config.provider == "local":
+            return f"http://localhost:{self.get_local_server_port()}"
+        return self.feature_store.get_feature_server_endpoint()
+
+    def get_local_server_port(self) -> int:
+        # Heuristic when running with xdist to extract unique ports for each worker
+        parsed_worker_id = re.findall("gw(\\d+)", self.worker_id)
+        if len(parsed_worker_id) != 0:
+            worker_id_num = int(parsed_worker_id[0])
+        else:
+            worker_id_num = 0
+        return 6566 + worker_id_num
 
 
 def table_name_from_data_source(ds: DataSource) -> Optional[str]:
     if hasattr(ds, "table_ref"):
-        return ds.table_ref
+        return ds.table_ref  # type: ignore
     elif hasattr(ds, "table"):
-        return ds.table
+        return ds.table  # type: ignore
     return None
 
 
 def construct_test_environment(
     test_repo_config: IntegrationTestRepoConfig,
     test_suite_name: str = "integration_test",
+    worker_id: str = "worker_id",
 ) -> Environment:
 
-    _uuid = str(uuid.uuid4()).replace("-", "")[:8]
+    _uuid = str(uuid.uuid4()).replace("-", "")[:6]
 
     run_id = os.getenv("GITHUB_RUN_ID", default=None)
     run_id = f"gh_run_{run_id}_{_uuid}" if run_id else _uuid
@@ -254,7 +300,7 @@ def construct_test_environment(
 
     repo_dir_name = tempfile.mkdtemp()
 
-    if test_repo_config.python_feature_server:
+    if test_repo_config.python_feature_server and test_repo_config.provider == "aws":
         from feast.infra.feature_servers.aws_lambda.config import (
             AwsLambdaFeatureServerConfig,
         )
@@ -264,10 +310,15 @@ def construct_test_environment(
             execution_role_name="arn:aws:iam::402087665549:role/lambda_execution_role",
         )
 
-        registry = f"s3://feast-integration-tests/registries/{project}/registry.db"
+        registry = (
+            f"s3://feast-integration-tests/registries/{project}/registry.db"
+        )  # type: Union[str, RegistryConfig]
     else:
+        # Note: even if it's a local feature server, the repo config does not have this configured
         feature_server = None
-        registry = str(Path(repo_dir_name) / "registry.db")
+        registry = RegistryConfig(
+            path=str(Path(repo_dir_name) / "registry.db"), cache_ttl_seconds=1,
+        )
 
     config = RepoConfig(
         registry=registry,
@@ -293,6 +344,7 @@ def construct_test_environment(
         feature_store=fs,
         data_source_creator=offline_creator,
         python_feature_server=test_repo_config.python_feature_server,
+        worker_id=worker_id,
     )
 
     return environment
