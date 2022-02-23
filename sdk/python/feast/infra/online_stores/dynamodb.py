@@ -167,12 +167,12 @@ class DynamoDBOnlineStore(OnlineStore):
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
         dynamodb_client = self._get_dynamodb_client(online_config)
         table_name = _get_table_name(config, table)
-        entity_keys = [compute_entity_id(k) for k in entity_keys]
+        entity_keys_str = [compute_entity_id(k) for k in entity_keys]
 
         result: List[Tuple[Optional[datetime], Optional[Dict[str, ValueProto]]]] = []
 
         with tracing_span(name="remote_call"):
-            responses = _do_single_table_batch_get(dynamodb_client, table_name, entity_keys)
+            responses = _do_single_table_batch_get(dynamodb_client, table_name, entity_keys_str)
 
         for item in responses:
             values = item.get("values")
