@@ -63,10 +63,12 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     boto3_max_pool_connections: Optional[int] = None
     """(optional) boto3 read timeout config"""
 
+
 class DynamoDBOnlineStore(OnlineStore):
     """
     Online feature store for AWS DynamoDB.
     """
+
     _dynamodb_client = None
 
     @log_exceptions_and_usage(online_store="dynamodb")
@@ -172,18 +174,20 @@ class DynamoDBOnlineStore(OnlineStore):
         result: List[Tuple[Optional[datetime], Optional[Dict[str, ValueProto]]]] = []
 
         with tracing_span(name="remote_call"):
-            responses = _do_single_table_batch_get(dynamodb_client, table_name, entity_keys_str)
+            responses = _do_single_table_batch_get(
+                dynamodb_client, table_name, entity_keys_str
+            )
 
         for item in responses:
             values = item.get("values")
 
             if values is not None:
                 res = {}
-                for feature_name, value_bin in values['M'].items():
+                for feature_name, value_bin in values["M"].items():
                     val = ValueProto()
-                    val.ParseFromString(value_bin['B'])
+                    val.ParseFromString(value_bin["B"])
                     res[feature_name] = val
-                result.append((datetime.fromisoformat(item["event_ts"]['S']), res))
+                result.append((datetime.fromisoformat(item["event_ts"]["S"]), res))
             else:
                 result.append((None, None))
         return result
@@ -200,8 +204,9 @@ class DynamoDBOnlineStore(OnlineStore):
         return threadlocal.dynamodb_resource
 
 
-
-def _do_single_table_batch_get(client, table_name, entity_keys, max_tries=10, base_backoff_time=0.01):
+def _do_single_table_batch_get(
+    client, table_name, entity_keys, max_tries=10, base_backoff_time=0.01
+):
     """
     Gets a batch of items from Amazon DynamoDB. Batches can contain keys from
     more than one table, but this function assume one table due to upstream limitation.
@@ -221,28 +226,33 @@ def _do_single_table_batch_get(client, table_name, entity_keys, max_tries=10, ba
     tries = 0
     retrieved = []
     while tries < max_tries:
-        request = {
-            table_name: {"Keys": [{"entity_id": {"S": k}} for k in entity_keys]}
-        }
+        request = {table_name: {"Keys": [{"entity_id": {"S": k}} for k in entity_keys]}}
         response = client.batch_get_item(RequestItems=request)
         # Collect any retrieved items and retry unprocessed keys.
-        retrieved = response['Responses'][table_name]
-        unprocessed = response['UnprocessedKeys']
+        retrieved = response["Responses"][table_name]
+        unprocessed = response["UnprocessedKeys"]
         if len(unprocessed) > 0:
             batch_keys = unprocessed
             unprocessed_count = sum(
-                [len(batch_key['Keys']) for batch_key in batch_keys.values()])
-            logger.debug("batch_get_item: %s unprocessed keys returned. Sleep, then retry.", unprocessed_count)
+                [len(batch_key["Keys"]) for batch_key in batch_keys.values()]
+            )
+            logger.debug(
+                "batch_get_item: %s unprocessed keys returned. Sleep, then retry.",
+                unprocessed_count,
+            )
             tries += 1
             if tries <= max_tries:
                 time.sleep(base_backoff_time)
                 base_backoff_time = min(base_backoff_time * 2, 8)
             else:
                 # we could return to clients a incomplete results but they would expect to have all the items retrived,
-                # failure could happen in batch get if one table is heavy-throttled 
+                # failure could happen in batch get if one table is heavy-throttled
                 # and failing would help them notice the problem and adjust capacity.
-                raise RuntimeError("batch_get_item failed to retrieve all items, got %d out of %d requested keys after %d tries. "
-                                   "Please check if one of the tables for the missing keys need more capacity." % (len(retrieved), len(batch_keys), tries))
+                raise RuntimeError(
+                    "batch_get_item failed to retrieve all items, got %d out of %d requested keys after %d tries. "
+                    "Please check if one of the tables for the missing keys need more capacity."
+                    % (len(retrieved), len(batch_keys), tries)
+                )
         else:
             break
 
@@ -251,45 +261,59 @@ def _do_single_table_batch_get(client, table_name, entity_keys, max_tries=10, ba
 
 def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
     if online_config.iam_role is not None:
-        sts_client = boto3.client('sts')
+        sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
-            RoleArn=online_config.iam_role,
-            RoleSessionName="AssumeRoleFeastSession"
+            RoleArn=online_config.iam_role, RoleSessionName="AssumeRoleFeastSession"
         )
-        credentials = assumed_role_object['Credentials']
+        credentials = assumed_role_object["Credentials"]
         return boto3.client(
             "dynamodb",
             region_name=online_config.region,
-            aws_access_key_id=credentials['AccessKeyId'],
-            aws_secret_access_key=credentials['SecretAccessKey'],
-            aws_session_token=credentials['SessionToken'],
-            config=botocore.client.Config(max_pool_connections=online_config.boto3_max_pool_connections if online_config.boto3_read_timeout else 10,
-                                          connect_timeout=1,
-                                          read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
-                                          retries={'mode': 'standard', 'total_max_attempts': 3}))
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+            config=botocore.client.Config(
+                max_pool_connections=online_config.boto3_max_pool_connections
+                if online_config.boto3_read_timeout
+                else 10,
+                connect_timeout=1,
+                read_timeout=online_config.boto3_read_timeout / 1000.0
+                if online_config.boto3_read_timeout
+                else 1,
+                retries={"mode": "standard", "total_max_attempts": 3},
+            ),
+        )
     else:
-        return boto3.client("dynamodb", 
-                            region_name=online_config.region,
-                            config=botocore.client.Config(max_pool_connections=online_config.boto3_max_pool_connections if online_config.boto3_read_timeout else 10,
-                                          connect_timeout=1,
-                                          read_timeout=online_config.boto3_read_timeout / 1000. if online_config.boto3_read_timeout else 1,
-                                          retries={'mode': 'standard', 'total_max_attempts': 3}))
+        return boto3.client(
+            "dynamodb",
+            region_name=online_config.region,
+            config=botocore.client.Config(
+                max_pool_connections=online_config.boto3_max_pool_connections
+                if online_config.boto3_read_timeout
+                else 10,
+                connect_timeout=1,
+                read_timeout=online_config.boto3_read_timeout / 1000.0
+                if online_config.boto3_read_timeout
+                else 1,
+                retries={"mode": "standard", "total_max_attempts": 3},
+            ),
+        )
 
 
 def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
     if online_config.iam_role is not None:
-        sts_client = boto3.client('sts')
+        sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
-            RoleArn=online_config.iam_role,
-            RoleSessionName="AssumeRoleFeastSession"
+            RoleArn=online_config.iam_role, RoleSessionName="AssumeRoleFeastSession"
         )
-        credentials = assumed_role_object['Credentials']
+        credentials = assumed_role_object["Credentials"]
         return boto3.resource(
             "dynamodb",
             region_name=online_config.region,
-            aws_access_key_id=credentials['AccessKeyId'],
-            aws_secret_access_key=credentials['SecretAccessKey'],
-            aws_session_token=credentials['SessionToken'])
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
     else:
         return boto3.resource("dynamodb", region_name=online_config.region)
 
