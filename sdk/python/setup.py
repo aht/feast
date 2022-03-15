@@ -85,6 +85,7 @@ REDIS_REQUIRED = [
 AWS_REQUIRED = [
     "boto3>=1.17.0",
     "docker>=5.0.2",
+    "amazon-dax-client>=2.0.0"
 ]
 
 SNOWFLAKE_REQUIRED = [
