@@ -35,9 +35,9 @@ from feast.repo_config import FeastConfigBaseModel, RepoConfig
 from feast.usage import log_exceptions_and_usage, tracing_span
 
 try:
+    import amazondax
     import boto3
     import botocore
-    import amazondax
     from botocore.exceptions import ClientError
 except ImportError as e:
     from feast.errors import FeastExtrasDependencyImportError
@@ -144,6 +144,8 @@ class DynamoDBOnlineStore(OnlineStore):
     ) -> None:
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
+
+        # XXX: move the batch writes to DAX
         dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         table_instance = dynamodb_resource.Table(_get_table_name(config, table))
@@ -273,13 +275,13 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
         )
         credentials = assumed_role_object["Credentials"]
         if online_config.dax_cluster_endpoint is not None:
-            dax = AmazonDaxClient(
-              endpoint_url=online_config.dax_cluster_endpoint,
-              region_name=online_config.region,
-              aws_access_key_id=credentials["AccessKeyId"],
-              aws_secret_access_key=credentials["SecretAccessKey"],
-              aws_session_token=credentials["SessionToken"],
-              config=botocore.client.Config(
+            dax = amazondax.AmazonDaxClient(
+                endpoint_url=online_config.dax_cluster_endpoint,
+                region_name=online_config.region,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+                config=botocore.client.Config(
                     max_pool_connections=online_config.boto3_max_pool_connections
                     if online_config.boto3_read_timeout
                     else 10,
@@ -287,7 +289,9 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
                     read_timeout=online_config.boto3_read_timeout / 1000.0
                     if online_config.boto3_read_timeout
                     else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3}))
+                    retries={"mode": "standard", "total_max_attempts": 3},
+                ),
+            )
         else:
             client = boto3.client(
                 "dynamodb",
@@ -305,10 +309,10 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
 
     else:
         if online_config.dax_cluster_endpoint is not None:
-            dax = AmazonDaxClient(
-              endpoint_url=online_config.dax_cluster_endpoint,
-              region_name=online_config.region,
-              config=botocore.client.Config(
+            dax = amazondax.AmazonDaxClient(
+                endpoint_url=online_config.dax_cluster_endpoint,
+                region_name=online_config.region,
+                config=botocore.client.Config(
                     max_pool_connections=online_config.boto3_max_pool_connections
                     if online_config.boto3_read_timeout
                     else 10,
@@ -316,7 +320,9 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
                     read_timeout=online_config.boto3_read_timeout / 1000.0
                     if online_config.boto3_read_timeout
                     else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3}))
+                    retries={"mode": "standard", "total_max_attempts": 3},
+                ),
+            )
         else:
             return boto3.client(
                 "dynamodb",
