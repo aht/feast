@@ -275,7 +275,7 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
         )
         credentials = assumed_role_object["Credentials"]
         if online_config.dax_cluster_endpoint is not None:
-            dax = amazondax.AmazonDaxClient(
+            return amazondax.AmazonDaxClient(
                 endpoint_url=online_config.dax_cluster_endpoint,
                 region_name=online_config.region,
                 aws_access_key_id=credentials["AccessKeyId"],
@@ -293,7 +293,7 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
                 ),
             )
         else:
-            client = boto3.client(
+            return boto3.client(
                 "dynamodb",
                 config=botocore.client.Config(
                     max_pool_connections=online_config.boto3_max_pool_connections
@@ -309,7 +309,7 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
 
     else:
         if online_config.dax_cluster_endpoint is not None:
-            dax = amazondax.AmazonDaxClient(
+            return amazondax.AmazonDaxClient(
                 endpoint_url=online_config.dax_cluster_endpoint,
                 region_name=online_config.region,
                 config=botocore.client.Config(
