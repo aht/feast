@@ -213,12 +213,19 @@ class DynamoDBOnlineStore(OnlineStore):
     def _get_dynamodb_resource_for_writes(
         self, online_config: DynamoDBOnlineStoreConfig
     ):
+        """Support DAX which uses amazondax and not boto3,
+        but amazondax does not support table operations (so we still need _get_dynamodb_resource())
+
+        We can eventually merge to use _get_dynamodb_client(), but the resource object has a nice batch_writer which retries batch_write on unprocessed items,
+        though internally it does not support perform exponential backoff during flushing https://github.com/boto/boto3/blob/develop/boto3/dynamodb/table.py#L164.
+
+        """
         threadlocal = threading.local()
         if "dynamodb_resource_for_writes" not in threadlocal.__dict__:
             threadlocal.dynamodb_resource_for_writes = _initialize_dynamodb_resource_for_writes(
                 online_config
             )
-        return threadlocal.dynamodb_resource
+        return threadlocal.dynamodb_resource_for_writes
 
 
 def _do_single_table_batch_get(
@@ -368,9 +375,6 @@ def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
 
 
 def _initialize_dynamodb_resource_for_writes(online_config: DynamoDBOnlineStoreConfig):
-    """Has a nice batch_writer which retries batch_write on unprocessed items,
-    though internally it does not support perform exponential backoff during flushing https://github.com/boto/boto3/blob/develop/boto3/dynamodb/table.py#L164
-    """
     if online_config.iam_role is not None:
         sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
