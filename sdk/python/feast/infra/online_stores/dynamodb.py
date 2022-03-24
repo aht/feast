@@ -145,8 +145,7 @@ class DynamoDBOnlineStore(OnlineStore):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
 
-        # XXX: move the batch writes to DAX
-        dynamodb_resource = self._get_dynamodb_resource(online_config)
+        dynamodb_resource = self._get_dynamodb_resource_for_writes(online_config)
 
         table_instance = dynamodb_resource.Table(_get_table_name(config, table))
         with table_instance.batch_writer() as batch:
@@ -209,6 +208,16 @@ class DynamoDBOnlineStore(OnlineStore):
         threadlocal = threading.local()
         if "dynamodb_resource" not in threadlocal.__dict__:
             threadlocal.dynamodb_resource = _initialize_dynamodb_resource(online_config)
+        return threadlocal.dynamodb_resource
+
+    def _get_dynamodb_resource_for_writes(
+        self, online_config: DynamoDBOnlineStoreConfig
+    ):
+        threadlocal = threading.local()
+        if "dynamodb_resource" not in threadlocal.__dict__:
+            threadlocal.dynamodb_resource = _initialize_dynamodb_resource_for_writes(
+                online_config
+            )
         return threadlocal.dynamodb_resource
 
 
@@ -356,6 +365,42 @@ def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
         )
     else:
         return boto3.resource("dynamodb", region_name=online_config.region)
+
+
+def _initialize_dynamodb_resource_for_writes(online_config: DynamoDBOnlineStoreConfig):
+    """Has a nice batch_writer which retries batch_write on unprocessed items,
+    though internally it does not support perform exponential backoff during flushing https://github.com/boto/boto3/blob/develop/boto3/dynamodb/table.py#L164
+    """
+    if online_config.iam_role is not None:
+        sts_client = boto3.client("sts")
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=online_config.iam_role, RoleSessionName="AssumeRoleFeastSession"
+        )
+        credentials = assumed_role_object["Credentials"]
+        if online_config.dax_cluster_endpoint is not None:
+            return amazondax.AmazonDaxClient.resource(
+                endpoint_url=online_config.dax_cluster_endpoint,
+                region_name=online_config.region,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
+        else:
+            return boto3.resource(
+                "dynamodb",
+                region_name=online_config.region,
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
+    else:
+        if online_config.dax_cluster_endpoint is not None:
+            return amazondax.AmazonDaxClient.resource(
+                endpoint_url=online_config.dax_cluster_endpoint,
+                region_name=online_config.region,
+            )
+        else:
+            return boto3.resource("dynamodb", region_name=online_config.region)
 
 
 def _get_table_name(config: RepoConfig, table: FeatureView) -> str:
