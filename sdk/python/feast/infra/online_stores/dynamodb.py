@@ -214,8 +214,8 @@ class DynamoDBOnlineStore(OnlineStore):
         self, online_config: DynamoDBOnlineStoreConfig
     ):
         threadlocal = threading.local()
-        if "dynamodb_resource" not in threadlocal.__dict__:
-            threadlocal.dynamodb_resource = _initialize_dynamodb_resource_for_writes(
+        if "dynamodb_resource_for_writes" not in threadlocal.__dict__:
+            threadlocal.dynamodb_resource_for_writes = _initialize_dynamodb_resource_for_writes(
                 online_config
             )
         return threadlocal.dynamodb_resource
