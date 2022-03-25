@@ -184,7 +184,7 @@ class DynamoDBOnlineStore(OnlineStore):
             responses = _do_single_table_batch_get(
                 dynamodb_client, table_name, entity_keys_str
             )
-
+        result_map_by_entity_id = {}
         for item in responses:
             values = item.get("values")
 
@@ -194,9 +194,14 @@ class DynamoDBOnlineStore(OnlineStore):
                     val = ValueProto()
                     val.ParseFromString(value_bin["B"])
                     res[feature_name] = val
-                result.append((datetime.fromisoformat(item["event_ts"]["S"]), res))
-            else:
-                result.append((None, None))
+                result_map_by_entity_id[item["entity_id"]["S"]] = (
+                    datetime.fromisoformat(item["event_ts"]["S"]),
+                    res,
+                )
+        result = []
+        # return the correct ordering as implicitly expected by upstream
+        for entity_key in entity_keys:
+            result.append(result_map_by_entity_id[entity_key])
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
@@ -249,8 +254,9 @@ def _do_single_table_batch_get(
     """
     tries = 0
     retrieved = []
+    batch_keys = entity_keys.copy()
     while tries < max_tries:
-        request = {table_name: {"Keys": [{"entity_id": {"S": k}} for k in entity_keys]}}
+        request = {table_name: {"Keys": [{"entity_id": {"S": k}} for k in batch_keys]}}
         response = client.batch_get_item(RequestItems=request)
         # Collect any retrieved items and retry unprocessed keys.
         retrieved = response["Responses"][table_name]
@@ -273,9 +279,9 @@ def _do_single_table_batch_get(
                 # failure could happen in batch get if one table is heavy-throttled
                 # and failing would help them notice the problem and adjust capacity.
                 raise RuntimeError(
-                    "batch_get_item failed to retrieve all items, got %d out of %d requested keys after %d tries. "
+                    "batch_get_item failed to retrieve all items, got %d out of %d requested keys after %d tries."
                     "Please check if one of the tables for the missing keys need more capacity."
-                    % (len(retrieved), len(batch_keys), tries)
+                    % (len(retrieved), len(entity_keys), tries)
                 )
         else:
             break
