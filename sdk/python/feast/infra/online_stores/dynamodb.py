@@ -201,7 +201,10 @@ class DynamoDBOnlineStore(OnlineStore):
         result = []
         # return the correct ordering as implicitly expected by upstream
         for entity_key in entity_keys_str:
-            result.append(result_map_by_entity_id[entity_key])
+            if entity_key in result_map_by_entity_id:
+                result.append(result_map_by_entity_id[entity_key])
+            else:
+                result.append((None, None))
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
