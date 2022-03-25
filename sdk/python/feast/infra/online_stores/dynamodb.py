@@ -200,7 +200,7 @@ class DynamoDBOnlineStore(OnlineStore):
                 )
         result = []
         # return the correct ordering as implicitly expected by upstream
-        for entity_key in entity_keys:
+        for entity_key in entity_keys_str:
             result.append(result_map_by_entity_id[entity_key])
         return result
 
