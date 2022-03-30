@@ -64,10 +64,10 @@ class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
     """(optional) IAM Role to assume, if needed e.g. for cross-account access"""
 
     boto3_read_timeout: Optional[int] = None
-    """(optional) boto3 read timeout config"""
+    """(optional) boto3 read timeout in seconds, see https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html"""
 
     boto3_max_pool_connections: Optional[int] = None
-    """(optional) boto3 read timeout config"""
+    """(optional) boto3 max pool size, see https://botocore.amazonaws.com/v1/documentation/api/latest/reference/config.html"""
 
 
 class DynamoDBOnlineStore(OnlineStore):
@@ -298,7 +298,7 @@ def _boto3_config(online_config: DynamoDBOnlineStoreConfig):
         if online_config.boto3_read_timeout
         else 10,
         connect_timeout=1,
-        read_timeout=online_config.boto3_read_timeout / 1000.0
+        read_timeout=online_config.boto3_read_timeout
         if online_config.boto3_read_timeout
         else 1,
         retries={"mode": "standard", "total_max_attempts": 3},
