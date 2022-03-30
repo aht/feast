@@ -292,6 +292,14 @@ def _do_single_table_batch_get(
     return retrieved
 
 
+def _boto3_config(online_config: DynamoDBOnlineStoreConfig):
+    return botocore.client.Config(
+        max_pool_connections=online_config.boto3_max_pool_connections if online_config.boto3_read_timeout else 10,
+        connect_timeout=1,
+        read_timeout=online_config.boto3_read_timeout / 1000.0 if online_config.boto3_read_timeout else 1,
+        retries={"mode": "standard", "total_max_attempts": 3})
+
+
 def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
     if online_config.iam_role is not None:
         sts_client = boto3.client("sts")
@@ -306,30 +314,12 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
                 aws_access_key_id=credentials["AccessKeyId"],
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
-                config=botocore.client.Config(
-                    max_pool_connections=online_config.boto3_max_pool_connections
-                    if online_config.boto3_read_timeout
-                    else 10,
-                    connect_timeout=1,
-                    read_timeout=online_config.boto3_read_timeout / 1000.0
-                    if online_config.boto3_read_timeout
-                    else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3},
-                ),
+                config=_boto3_config(),
             )
         else:
             return boto3.client(
                 "dynamodb",
-                config=botocore.client.Config(
-                    max_pool_connections=online_config.boto3_max_pool_connections
-                    if online_config.boto3_read_timeout
-                    else 10,
-                    connect_timeout=1,
-                    read_timeout=online_config.boto3_read_timeout / 1000.0
-                    if online_config.boto3_read_timeout
-                    else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3},
-                ),
+                config=_boto3_config(),
             )
 
     else:
@@ -337,31 +327,13 @@ def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
             return amazondax.AmazonDaxClient(
                 endpoint_url=online_config.dax_cluster_endpoint,
                 region_name=online_config.region,
-                config=botocore.client.Config(
-                    max_pool_connections=online_config.boto3_max_pool_connections
-                    if online_config.boto3_read_timeout
-                    else 10,
-                    connect_timeout=1,
-                    read_timeout=online_config.boto3_read_timeout / 1000.0
-                    if online_config.boto3_read_timeout
-                    else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3},
-                ),
+                config=_boto3_config(),
             )
         else:
             return boto3.client(
                 "dynamodb",
                 region_name=online_config.region,
-                config=botocore.client.Config(
-                    max_pool_connections=online_config.boto3_max_pool_connections
-                    if online_config.boto3_read_timeout
-                    else 10,
-                    connect_timeout=1,
-                    read_timeout=online_config.boto3_read_timeout / 1000.0
-                    if online_config.boto3_read_timeout
-                    else 1,
-                    retries={"mode": "standard", "total_max_attempts": 3},
-                ),
+                config=_boto3_config(),
             )
 
 
@@ -378,9 +350,14 @@ def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
             aws_access_key_id=credentials["AccessKeyId"],
             aws_secret_access_key=credentials["SecretAccessKey"],
             aws_session_token=credentials["SessionToken"],
+            config=_boto3_config(),
         )
     else:
-        return boto3.resource("dynamodb", region_name=online_config.region)
+            return boto3.resource(
+                "dynamodb",
+                region_name=online_config.region,
+                config=_boto3_config(),
+            )
 
 
 def _initialize_dynamodb_resource_for_writes(online_config: DynamoDBOnlineStoreConfig):
@@ -397,6 +374,7 @@ def _initialize_dynamodb_resource_for_writes(online_config: DynamoDBOnlineStoreC
                 aws_access_key_id=credentials["AccessKeyId"],
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
+                config=_boto3_config(),
             )
         else:
             return boto3.resource(
@@ -405,15 +383,21 @@ def _initialize_dynamodb_resource_for_writes(online_config: DynamoDBOnlineStoreC
                 aws_access_key_id=credentials["AccessKeyId"],
                 aws_secret_access_key=credentials["SecretAccessKey"],
                 aws_session_token=credentials["SessionToken"],
+                config=_boto3_config(),
             )
     else:
         if online_config.dax_cluster_endpoint is not None:
             return amazondax.AmazonDaxClient.resource(
                 endpoint_url=online_config.dax_cluster_endpoint,
                 region_name=online_config.region,
+                config=_boto3_config(),
             )
         else:
-            return boto3.resource("dynamodb", region_name=online_config.region)
+            return boto3.resource(
+                "dynamodb",
+                region_name=online_config.region,
+                config=_boto3_config(),
+            )
 
 
 def _get_table_name(config: RepoConfig, table: FeatureView) -> str:
