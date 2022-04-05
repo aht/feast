@@ -90,7 +90,7 @@ class DynamoDBOnlineStore(OnlineStore):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
         dynamodb_client = _initialize_dynamodb_client_for_table_ops(online_config)
-        dynamodb_resource = self._get_dynamodb_resource(online_config)
+        dynamodb_resource = _initialize_dynamodb_resource_for_table_ops(online_config)
 
         for table_instance in tables_to_keep:
             try:
@@ -127,7 +127,7 @@ class DynamoDBOnlineStore(OnlineStore):
     ):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_resource = self._get_dynamodb_resource(online_config)
+        dynamodb_resource = _initialize_dynamodb_resource_for_table_ops(online_config)
 
         for table in tables:
             _delete_table_idempotent(dynamodb_resource, _get_table_name(config, table))
@@ -208,6 +208,8 @@ class DynamoDBOnlineStore(OnlineStore):
         return result
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
+        # boto3 client objects are thread-safe
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/clients.html#multithreading-or-multiprocessing-with-clients
         if self._dynamodb_client is None:
             self._dynamodb_client = _initialize_dynamodb_client_w_dax(online_config)
         return self._dynamodb_client
@@ -302,21 +304,28 @@ def _boto3_config(online_config: DynamoDBOnlineStoreConfig):
 
 
 def _initialize_dynamodb_client_for_table_ops(online_config: DynamoDBOnlineStoreConfig):
-    """Needed for table operations""""
+    """Needed for table operations"""
     if online_config.iam_role is not None:
         sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
             RoleArn=online_config.iam_role, RoleSessionName="AssumeRoleFeastSession"
         )
         credentials = assumed_role_object["Credentials"]
-        return boto3.client("dynamodb", config=_boto3_config(online_config),)
-
+        return boto3.client(
+            "dynamodb",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+            config=_boto3_config(online_config),
+            config=_boto3_config(online_config),
+        )
     else:
         return boto3.client(
             "dynamodb",
             region_name=online_config.region,
             config=_boto3_config(online_config),
-            )
+        )
+
 
 def _initialize_dynamodb_client_w_dax(online_config: DynamoDBOnlineStoreConfig):
     if online_config.iam_role is not None:
@@ -352,7 +361,9 @@ def _initialize_dynamodb_client_w_dax(online_config: DynamoDBOnlineStoreConfig):
             )
 
 
-def _initialize_dynamodb_resource(online_config: DynamoDBOnlineStoreConfig):
+def _initialize_dynamodb_resource_for_table_ops(
+    online_config: DynamoDBOnlineStoreConfig,
+):
     if online_config.iam_role is not None:
         sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
@@ -479,7 +490,9 @@ class DynamoDBTable(InfraObject):
 
     def update(self):
         dynamodb_client = _initialize_dynamodb_client_for_table_ops(region=self.region)
-        dynamodb_resource = _initialize_dynamodb_resource(region=self.region)
+        dynamodb_resource = _initialize_dynamodb_resource_for_table_ops(
+            region=self.region
+        )
 
         try:
             dynamodb_resource.create_table(
@@ -500,5 +513,7 @@ class DynamoDBTable(InfraObject):
         dynamodb_client.get_waiter("table_exists").wait(TableName=f"{self.name}")
 
     def teardown(self):
-        dynamodb_resource = _initialize_dynamodb_resource(region=self.region)
+        dynamodb_resource = _initialize_dynamodb_resource_for_table_ops(
+            region=self.region
+        )
         _delete_table_idempotent(dynamodb_resource, self.name)
