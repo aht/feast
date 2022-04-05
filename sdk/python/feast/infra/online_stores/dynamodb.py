@@ -89,7 +89,7 @@ class DynamoDBOnlineStore(OnlineStore):
     ):
         online_config = config.online_store
         assert isinstance(online_config, DynamoDBOnlineStoreConfig)
-        dynamodb_client = self._get_dynamodb_client(online_config)
+        dynamodb_client = _initialize_dynamodb_client_for_table_ops(online_config)
         dynamodb_resource = self._get_dynamodb_resource(online_config)
 
         for table_instance in tables_to_keep:
@@ -209,14 +209,8 @@ class DynamoDBOnlineStore(OnlineStore):
 
     def _get_dynamodb_client(self, online_config: DynamoDBOnlineStoreConfig):
         if self._dynamodb_client is None:
-            self._dynamodb_client = _initialize_dynamodb_client(online_config)
+            self._dynamodb_client = _initialize_dynamodb_client_w_dax(online_config)
         return self._dynamodb_client
-
-    def _get_dynamodb_resource(self, online_config: DynamoDBOnlineStoreConfig):
-        threadlocal = threading.local()
-        if "dynamodb_resource" not in threadlocal.__dict__:
-            threadlocal.dynamodb_resource = _initialize_dynamodb_resource(online_config)
-        return threadlocal.dynamodb_resource
 
     def _get_dynamodb_resource_for_writes(
         self, online_config: DynamoDBOnlineStoreConfig
@@ -229,6 +223,8 @@ class DynamoDBOnlineStore(OnlineStore):
 
         """
         threadlocal = threading.local()
+        # boto3 resource are not thread-safe unlike client objects
+        # https://boto3.amazonaws.com/v1/documentation/api/latest/guide/clients.html#multithreading-or-multiprocessing-with-clients
         if "dynamodb_resource_for_writes" not in threadlocal.__dict__:
             threadlocal.dynamodb_resource_for_writes = _initialize_dynamodb_resource_for_writes(
                 online_config
@@ -305,7 +301,24 @@ def _boto3_config(online_config: DynamoDBOnlineStoreConfig):
     )
 
 
-def _initialize_dynamodb_client(online_config: DynamoDBOnlineStoreConfig):
+def _initialize_dynamodb_client_for_table_ops(online_config: DynamoDBOnlineStoreConfig):
+    """Needed for table operations""""
+    if online_config.iam_role is not None:
+        sts_client = boto3.client("sts")
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=online_config.iam_role, RoleSessionName="AssumeRoleFeastSession"
+        )
+        credentials = assumed_role_object["Credentials"]
+        return boto3.client("dynamodb", config=_boto3_config(online_config),)
+
+    else:
+        return boto3.client(
+            "dynamodb",
+            region_name=online_config.region,
+            config=_boto3_config(online_config),
+            )
+
+def _initialize_dynamodb_client_w_dax(online_config: DynamoDBOnlineStoreConfig):
     if online_config.iam_role is not None:
         sts_client = boto3.client("sts")
         assumed_role_object = sts_client.assume_role(
@@ -465,7 +478,7 @@ class DynamoDBTable(InfraObject):
         )
 
     def update(self):
-        dynamodb_client = _initialize_dynamodb_client(region=self.region)
+        dynamodb_client = _initialize_dynamodb_client_for_table_ops(region=self.region)
         dynamodb_resource = _initialize_dynamodb_resource(region=self.region)
 
         try:
