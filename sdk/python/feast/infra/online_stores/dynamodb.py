@@ -317,7 +317,6 @@ def _initialize_dynamodb_client_for_table_ops(online_config: DynamoDBOnlineStore
             aws_secret_access_key=credentials["SecretAccessKey"],
             aws_session_token=credentials["SessionToken"],
             config=_boto3_config(online_config),
-            config=_boto3_config(online_config),
         )
     else:
         return boto3.client(
