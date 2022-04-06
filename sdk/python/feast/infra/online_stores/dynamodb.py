@@ -217,12 +217,8 @@ class DynamoDBOnlineStore(OnlineStore):
     def _get_dynamodb_resource_for_writes(
         self, online_config: DynamoDBOnlineStoreConfig
     ):
-        """Support DAX which uses amazondax and not boto3,
-        but amazondax does not support table operations (so we still need _get_dynamodb_resource())
-
-        We can eventually merge to use _get_dynamodb_client(), but the resource object has a nice batch_writer which retries batch_write on unprocessed items,
-        though internally it does not support perform exponential backoff during flushing https://github.com/boto/boto3/blob/develop/boto3/dynamodb/table.py#L164.
-
+        """Support writing to DAX which uses amazondax package and not boto3,
+        but amazondax does not support table operations.
         """
         threadlocal = threading.local()
         # boto3 resource are not thread-safe unlike client objects
