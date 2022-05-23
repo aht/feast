@@ -37,7 +37,7 @@ from colorama import Fore, Style
 from google.protobuf.timestamp_pb2 import Timestamp
 from tqdm import tqdm
 
-from feast import feature_server, flags, flags_helper, utils
+from feast import flags, flags_helper, utils
 from feast.base_feature_view import BaseFeatureView
 from feast.diff.infra_diff import InfraDiff, diff_infra_protos
 from feast.diff.registry_diff import RegistryDiff, apply_diff_to_registry, diff_between
@@ -1769,6 +1769,7 @@ class FeatureStore:
     @log_exceptions_and_usage
     def serve(self, host: str, port: int, no_access_log: bool) -> None:
         """Start the feature consumption server locally on a given port."""
+        from feast import feature_server
         feature_server.start_server(self, host, port, no_access_log)
 
     @log_exceptions_and_usage
