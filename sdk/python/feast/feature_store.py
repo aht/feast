@@ -1770,6 +1770,7 @@ class FeatureStore:
     def serve(self, host: str, port: int, no_access_log: bool) -> None:
         """Start the feature consumption server locally on a given port."""
         from feast import feature_server
+
         feature_server.start_server(self, host, port, no_access_log)
 
     @log_exceptions_and_usage
